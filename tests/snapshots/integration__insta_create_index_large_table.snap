@@ -1,0 +1,66 @@
+---
+source: tests/integration.rs
+assertion_line: 245
+expression: result
+---
+{
+  "file": "test.sql",
+  "findings": [
+    {
+      "rule_id": "create-index",
+      "risk_level": "extreme",
+      "confidence": "definite",
+      "lock_mode": "SHARE",
+      "rewrite": {
+        "type": "none"
+      },
+      "affected_table": "orders",
+      "summary": "CREATE INDEX \"idx_orders_customer\" on \"orders\" without CONCURRENTLY",
+      "explanation": "Takes SHARE lock on \"orders\", blocking all INSERT, UPDATE, and DELETE for the entire duration of the index build. Table is 46.6 GB.",
+      "recipe": {
+        "title": "Non-blocking index build on \"orders\"",
+        "steps": [
+          {
+            "phase": "expand",
+            "description": "Create index concurrently (cannot run inside a transaction block)",
+            "sql": "CREATE INDEX CONCURRENTLY \"idx_orders_customer\" ON \"orders\" (customer_id);",
+            "separate_transaction": true
+          }
+        ]
+      },
+      "pg_version_note": null,
+      "statement_sql": "CREATE INDEX idx_orders_customer ON orders (customer_id)",
+      "estimated_duration": {
+        "low_seconds": 597,
+        "high_seconds": 1590,
+        "caveats": [
+          "Throughput estimated; actual duration depends on storage, IO load, and concurrent activity"
+        ]
+      },
+      "assumptions": []
+    }
+  ],
+  "blast_radius": {
+    "per_table": [
+      {
+        "table_name": "orders",
+        "strongest_lock": "SHARE",
+        "blocks_reads": false,
+        "blocks_writes": true,
+        "statement_count": 1,
+        "table_size": null,
+        "estimated_total_duration": {
+          "low_seconds": 597,
+          "high_seconds": 1590,
+          "caveats": [
+            "Throughput estimated; actual duration depends on storage, IO load, and concurrent activity"
+          ]
+        },
+        "recommendation": null
+      }
+    ]
+  },
+  "overall_risk": "extreme",
+  "overall_confidence": "definite",
+  "assumptions": []
+}

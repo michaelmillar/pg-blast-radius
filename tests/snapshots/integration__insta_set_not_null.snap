@@ -1,0 +1,76 @@
+---
+source: tests/integration.rs
+assertion_line: 251
+expression: result
+---
+{
+  "file": "test.sql",
+  "findings": [
+    {
+      "rule_id": "set-not-null",
+      "risk_level": "high",
+      "confidence": "needs_catalog",
+      "lock_mode": "ACCESS_EXCLUSIVE",
+      "rewrite": {
+        "type": "none"
+      },
+      "affected_table": "users",
+      "summary": "SET NOT NULL on \"users\".\"email\" requires full table scan",
+      "explanation": "SET NOT NULL acquires ACCESS EXCLUSIVE lock and performs a full table scan to verify no NULLs exist. On PG 12+, the scan is skipped if a pre-validated CHECK (column IS NOT NULL) constraint already exists.",
+      "recipe": {
+        "title": "Safe SET NOT NULL for \"users\".\"email\"",
+        "steps": [
+          {
+            "phase": "expand",
+            "description": "Add CHECK constraint with NOT VALID (brief lock, no scan)",
+            "sql": "ALTER TABLE \"users\" ADD CONSTRAINT \"users_email_not_null\" CHECK (\"email\" IS NOT NULL) NOT VALID;",
+            "separate_transaction": false
+          },
+          {
+            "phase": "validate",
+            "description": "Validate constraint (SHARE UPDATE EXCLUSIVE, non-blocking)",
+            "sql": "ALTER TABLE \"users\" VALIDATE CONSTRAINT \"users_email_not_null\";",
+            "separate_transaction": true
+          },
+          {
+            "phase": "switch",
+            "description": "SET NOT NULL is now instant (PG 12+) as CHECK already proves it",
+            "sql": "ALTER TABLE \"users\" ALTER COLUMN \"email\" SET NOT NULL;",
+            "separate_transaction": true
+          },
+          {
+            "phase": "contract",
+            "description": "Drop the redundant CHECK constraint",
+            "sql": "ALTER TABLE \"users\" DROP CONSTRAINT \"users_email_not_null\";",
+            "separate_transaction": false
+          }
+        ]
+      },
+      "pg_version_note": "PG 12+ can skip the scan with a pre-validated CHECK constraint.",
+      "statement_sql": "ALTER TABLE users ALTER COLUMN email SET NOT NULL",
+      "estimated_duration": null,
+      "assumptions": [
+        "PostgreSQL 16 assumed"
+      ]
+    }
+  ],
+  "blast_radius": {
+    "per_table": [
+      {
+        "table_name": "users",
+        "strongest_lock": "ACCESS_EXCLUSIVE",
+        "blocks_reads": true,
+        "blocks_writes": true,
+        "statement_count": 1,
+        "table_size": null,
+        "estimated_total_duration": null,
+        "recommendation": null
+      }
+    ]
+  },
+  "overall_risk": "high",
+  "overall_confidence": "needs_catalog",
+  "assumptions": [
+    "PostgreSQL 16 assumed"
+  ]
+}

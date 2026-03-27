@@ -1,0 +1,120 @@
+---
+source: tests/integration.rs
+assertion_line: 237
+expression: result
+---
+{
+  "file": "test.sql",
+  "findings": [
+    {
+      "rule_id": "add-column",
+      "risk_level": "low",
+      "confidence": "definite",
+      "lock_mode": "ACCESS_EXCLUSIVE",
+      "rewrite": {
+        "type": "none"
+      },
+      "affected_table": "users",
+      "summary": "ADD COLUMN \"email\" on \"users\" (no default)",
+      "explanation": "Metadata-only change. ACCESS EXCLUSIVE lock held for milliseconds. No table rewrite. No scan.",
+      "recipe": null,
+      "pg_version_note": null,
+      "statement_sql": "ALTER TABLE users ADD COLUMN email TEXT",
+      "estimated_duration": null,
+      "assumptions": []
+    },
+    {
+      "rule_id": "set-not-null",
+      "risk_level": "high",
+      "confidence": "needs_catalog",
+      "lock_mode": "ACCESS_EXCLUSIVE",
+      "rewrite": {
+        "type": "none"
+      },
+      "affected_table": "users",
+      "summary": "SET NOT NULL on \"users\".\"email\" requires full table scan",
+      "explanation": "SET NOT NULL acquires ACCESS EXCLUSIVE lock and performs a full table scan to verify no NULLs exist. On PG 12+, the scan is skipped if a pre-validated CHECK (column IS NOT NULL) constraint already exists.",
+      "recipe": {
+        "title": "Safe SET NOT NULL for \"users\".\"email\"",
+        "steps": [
+          {
+            "phase": "expand",
+            "description": "Add CHECK constraint with NOT VALID (brief lock, no scan)",
+            "sql": "ALTER TABLE \"users\" ADD CONSTRAINT \"users_email_not_null\" CHECK (\"email\" IS NOT NULL) NOT VALID;",
+            "separate_transaction": false
+          },
+          {
+            "phase": "validate",
+            "description": "Validate constraint (SHARE UPDATE EXCLUSIVE, non-blocking)",
+            "sql": "ALTER TABLE \"users\" VALIDATE CONSTRAINT \"users_email_not_null\";",
+            "separate_transaction": true
+          },
+          {
+            "phase": "switch",
+            "description": "SET NOT NULL is now instant (PG 12+) as CHECK already proves it",
+            "sql": "ALTER TABLE \"users\" ALTER COLUMN \"email\" SET NOT NULL;",
+            "separate_transaction": true
+          },
+          {
+            "phase": "contract",
+            "description": "Drop the redundant CHECK constraint",
+            "sql": "ALTER TABLE \"users\" DROP CONSTRAINT \"users_email_not_null\";",
+            "separate_transaction": false
+          }
+        ]
+      },
+      "pg_version_note": "PG 12+ can skip the scan with a pre-validated CHECK constraint.",
+      "statement_sql": "ALTER TABLE users ALTER COLUMN email SET NOT NULL",
+      "estimated_duration": null,
+      "assumptions": [
+        "PostgreSQL 16 assumed"
+      ]
+    },
+    {
+      "rule_id": "create-index",
+      "risk_level": "high",
+      "confidence": "needs_catalog",
+      "lock_mode": "SHARE",
+      "rewrite": {
+        "type": "none"
+      },
+      "affected_table": "users",
+      "summary": "CREATE INDEX \"idx_users_email\" on \"users\" without CONCURRENTLY",
+      "explanation": "Takes SHARE lock on \"users\", blocking all INSERT, UPDATE, and DELETE for the entire duration of the index build. Table size unknown; use --dsn for duration estimate.",
+      "recipe": {
+        "title": "Non-blocking index build on \"users\"",
+        "steps": [
+          {
+            "phase": "expand",
+            "description": "Create index concurrently (cannot run inside a transaction block)",
+            "sql": "CREATE INDEX CONCURRENTLY \"idx_users_email\" ON \"users\" (email);",
+            "separate_transaction": true
+          }
+        ]
+      },
+      "pg_version_note": null,
+      "statement_sql": "CREATE INDEX idx_users_email ON users (email)",
+      "estimated_duration": null,
+      "assumptions": []
+    }
+  ],
+  "blast_radius": {
+    "per_table": [
+      {
+        "table_name": "users",
+        "strongest_lock": "ACCESS_EXCLUSIVE",
+        "blocks_reads": true,
+        "blocks_writes": true,
+        "statement_count": 3,
+        "table_size": null,
+        "estimated_total_duration": null,
+        "recommendation": "3 statements touch \"users\". Consider splitting into separate migrations."
+      }
+    ]
+  },
+  "overall_risk": "high",
+  "overall_confidence": "needs_catalog",
+  "assumptions": [
+    "PostgreSQL 16 assumed"
+  ]
+}

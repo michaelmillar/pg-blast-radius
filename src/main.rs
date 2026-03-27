@@ -1,0 +1,147 @@
+use std::path::PathBuf;
+
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+
+use pg_blast_radius::analysis;
+use pg_blast_radius::catalog::CatalogInfo;
+use pg_blast_radius::output;
+use pg_blast_radius::rules::{PgVersion, RuleContext};
+use pg_blast_radius::types::RiskLevel;
+
+#[derive(Parser)]
+#[command(
+    name = "pg-blast-radius",
+    version,
+    about = "PostgreSQL migration risk analyser"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Analyse {
+        files: Vec<PathBuf>,
+
+        #[arg(long, default_value = "16")]
+        pg_version: u32,
+
+        #[arg(long, default_value = "terminal")]
+        format: OutputFormat,
+
+        #[arg(long, default_value = "high")]
+        fail_level: RiskLevel,
+
+        #[cfg(feature = "catalog")]
+        #[arg(long)]
+        dsn: Option<String>,
+
+        #[arg(long)]
+        stats_file: Option<PathBuf>,
+    },
+
+    #[cfg(feature = "catalog")]
+    CollectStats {
+        #[arg(long)]
+        dsn: String,
+    },
+}
+
+#[derive(Clone, clap::ValueEnum)]
+enum OutputFormat {
+    Terminal,
+    Json,
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Analyse {
+            files,
+            pg_version,
+            format,
+            fail_level,
+            #[cfg(feature = "catalog")]
+            dsn,
+            stats_file,
+        } => {
+            if files.is_empty() {
+                anyhow::bail!("No SQL files provided. Usage: pg-blast-radius analyse <files...>");
+            }
+
+            let catalog = load_catalog(
+                #[cfg(feature = "catalog")]
+                dsn.as_deref(),
+                stats_file.as_deref(),
+            )?;
+
+            let ctx = RuleContext {
+                pg_version: PgVersion { major: pg_version },
+                catalog: catalog.as_ref(),
+            };
+
+            let mut results = Vec::new();
+            let mut exit_code = 0;
+
+            for file in &files {
+                let source = std::fs::read_to_string(file)
+                    .map_err(|e| anyhow::anyhow!("Failed to read {}: {e}", file.display()))?;
+
+                let findings = pg_blast_radius::rules::analyse(&source, &ctx)?;
+                let result = analysis::build_result(&file.display().to_string(), findings);
+
+                if result.overall_risk >= fail_level {
+                    exit_code = 1;
+                }
+
+                results.push(result);
+            }
+
+            match format {
+                OutputFormat::Terminal => output::terminal::render(&results),
+                OutputFormat::Json => output::json::render(&results)?,
+            }
+
+            std::process::exit(exit_code);
+        }
+
+        #[cfg(feature = "catalog")]
+        Commands::CollectStats { dsn } => {
+            let catalog = pg_blast_radius::catalog::live::fetch_catalog(&dsn)?;
+            let entries: Vec<_> = catalog
+                .tables
+                .into_iter()
+                .map(|(name, size)| {
+                    serde_json::json!({
+                        "table_name": name,
+                        "total_bytes": size.total_bytes,
+                        "row_estimate": size.row_estimate
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&entries)?);
+            Ok(())
+        }
+    }
+}
+
+fn load_catalog(
+    #[cfg(feature = "catalog")] dsn: Option<&str>,
+    stats_file: Option<&std::path::Path>,
+) -> Result<Option<CatalogInfo>> {
+    if let Some(path) = stats_file {
+        return Ok(Some(
+            pg_blast_radius::catalog::stats_file::load_stats_file(path)?,
+        ));
+    }
+
+    #[cfg(feature = "catalog")]
+    if let Some(dsn) = dsn {
+        return Ok(Some(pg_blast_radius::catalog::live::fetch_catalog(dsn)?));
+    }
+
+    Ok(None)
+}
