@@ -2,8 +2,10 @@ use std::collections::HashMap;
 
 use pg_blast_radius::analysis;
 use pg_blast_radius::catalog::CatalogInfo;
+use pg_blast_radius::locks::DmlKind;
 use pg_blast_radius::rules::{PgVersion, RuleContext, analyse};
 use pg_blast_radius::types::*;
+use pg_blast_radius::workload::{QueryFamily, TransactionBaseline, WorkloadProfile};
 
 fn mock_catalog(tables: &[(&str, i64, i64)]) -> CatalogInfo {
     let mut map = HashMap::new();
@@ -17,16 +19,39 @@ fn mock_catalog(tables: &[(&str, i64, i64)]) -> CatalogInfo {
             },
         );
     }
-    CatalogInfo { tables: map }
+    CatalogInfo {
+        tables: map,
+        workload: None,
+    }
+}
+
+fn mock_workload(families: Vec<QueryFamily>) -> WorkloadProfile {
+    WorkloadProfile {
+        query_families: families,
+        transaction_baseline: TransactionBaseline {
+            active_sessions: 10,
+            idle_in_transaction: 2,
+            median_age_ms: 50.0,
+            p95_age_ms: 200.0,
+            max_age_ms: 5000.0,
+        },
+        collected_at: "2026-03-29T10:00:00Z".into(),
+        stats_reset: Some("2026-03-01T00:00:00Z".into()),
+        unparseable_queries: 0,
+    }
 }
 
 fn analyse_fixture(sql: &str, catalog: Option<&CatalogInfo>) -> AnalysisResult {
     let ctx = RuleContext {
         pg_version: PgVersion { major: 16 },
         catalog,
+        transaction_baseline: catalog
+            .and_then(|c| c.workload.as_ref())
+            .map(|w| &w.transaction_baseline),
     };
     let findings = analyse(sql, &ctx).unwrap();
-    analysis::build_result("test.sql", findings)
+    let workload = catalog.and_then(|c| c.workload.as_ref());
+    analysis::build_result("test.sql", findings, workload)
 }
 
 fn fixture(name: &str) -> String {
@@ -93,7 +118,7 @@ fn alter_type_rewrite_is_extreme_on_huge_table() {
     let catalog = mock_catalog(&[("orders", 50_000_000_000, 800_000_000)]);
     let result = analyse_fixture(&fixture("alter_type_rewrite.sql"), Some(&catalog));
     assert_eq!(result.overall_risk, RiskLevel::Extreme);
-    assert!(result.findings[0].estimated_duration.is_some());
+    assert!(result.findings[0].duration_forecast.is_some());
 }
 
 #[test]
@@ -224,11 +249,125 @@ fn pg10_add_column_default_is_extreme() {
     let ctx = RuleContext {
         pg_version: PgVersion { major: 10 },
         catalog: None,
+        transaction_baseline: None,
     };
     let sql = "ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active';";
     let findings = analyse(sql, &ctx).unwrap();
-    let result = analysis::build_result("test.sql", findings);
+    let result = analysis::build_result("test.sql", findings, None);
     assert_eq!(result.overall_risk, RiskLevel::Extreme);
+}
+
+#[test]
+fn confidence_is_static_without_catalog() {
+    let result = analyse_fixture(&fixture("create_index.sql"), None);
+    assert_eq!(result.overall_confidence, ConfidenceGrade::Static);
+    assert_eq!(result.findings[0].confidence.grade, ConfidenceGrade::Static);
+}
+
+#[test]
+fn confidence_is_estimated_with_catalog() {
+    let catalog = mock_catalog(&[("orders", 50_000_000_000, 800_000_000)]);
+    let sql = "CREATE INDEX idx_orders_cust ON orders (customer_id);";
+    let result = analyse_fixture(sql, Some(&catalog));
+    assert_eq!(result.findings[0].confidence.grade, ConfidenceGrade::Estimated);
+    assert!(!result.findings[0].confidence.from_catalog.is_empty());
+}
+
+#[test]
+fn duration_forecast_has_p50_p90_worst() {
+    let catalog = mock_catalog(&[("orders", 10_737_418_240, 100_000_000)]);
+    let sql = "CREATE INDEX idx_orders_cust ON orders (customer_id);";
+    let result = analyse_fixture(sql, Some(&catalog));
+    let forecast = result.findings[0].duration_forecast.as_ref().unwrap();
+    assert!(forecast.p50_seconds > 0.0);
+    assert!(forecast.p90_seconds >= forecast.p50_seconds);
+    assert!(forecast.worst_seconds >= forecast.p90_seconds);
+}
+
+#[test]
+fn workload_aware_blocked_query_forecast() {
+    let mut catalog = mock_catalog(&[("orders", 10_737_418_240, 100_000_000)]);
+    catalog.workload = Some(mock_workload(vec![
+        QueryFamily {
+            queryid: 1,
+            normalised_sql: "SELECT * FROM orders WHERE customer_id = $1".into(),
+            label: "SELECT ... FROM orders WHERE customer_id = $1".into(),
+            tables: vec!["orders".into()],
+            dml_kind: DmlKind::Select,
+            lock_mode: LockMode::AccessShare,
+            calls_per_sec: 135.0,
+            mean_exec_ms: 5.0,
+            p95_exec_ms: Some(15.0),
+        },
+        QueryFamily {
+            queryid: 2,
+            normalised_sql: "INSERT INTO orders (customer_id, total) VALUES ($1, $2)".into(),
+            label: "INSERT INTO orders (...)".into(),
+            tables: vec!["orders".into()],
+            dml_kind: DmlKind::Insert,
+            lock_mode: LockMode::RowExclusive,
+            calls_per_sec: 80.0,
+            mean_exec_ms: 3.0,
+            p95_exec_ms: Some(10.0),
+        },
+    ]));
+
+    let sql = "CREATE INDEX idx_orders_status ON orders (status);";
+    let result = analyse_fixture(sql, Some(&catalog));
+
+    let orders_blast = result
+        .blast_radius
+        .per_table
+        .iter()
+        .find(|t| t.table_name == "orders")
+        .unwrap();
+
+    assert!(!orders_blast.blocked_queries.is_empty());
+    assert!(orders_blast.total_blocked_qps > 0.0);
+    assert_eq!(orders_blast.confidence.grade, ConfidenceGrade::Measured);
+}
+
+#[test]
+fn share_lock_only_blocks_writes_in_forecast() {
+    let mut catalog = mock_catalog(&[("orders", 10_737_418_240, 100_000_000)]);
+    catalog.workload = Some(mock_workload(vec![
+        QueryFamily {
+            queryid: 1,
+            normalised_sql: "SELECT * FROM orders WHERE id = $1".into(),
+            label: "SELECT ... FROM orders".into(),
+            tables: vec!["orders".into()],
+            dml_kind: DmlKind::Select,
+            lock_mode: LockMode::AccessShare,
+            calls_per_sec: 100.0,
+            mean_exec_ms: 2.0,
+            p95_exec_ms: None,
+        },
+        QueryFamily {
+            queryid: 2,
+            normalised_sql: "INSERT INTO orders (...) VALUES (...)".into(),
+            label: "INSERT INTO orders".into(),
+            tables: vec!["orders".into()],
+            dml_kind: DmlKind::Insert,
+            lock_mode: LockMode::RowExclusive,
+            calls_per_sec: 50.0,
+            mean_exec_ms: 3.0,
+            p95_exec_ms: None,
+        },
+    ]));
+
+    let sql = "CREATE INDEX idx_orders_status ON orders (status);";
+    let result = analyse_fixture(sql, Some(&catalog));
+
+    let orders_blast = result
+        .blast_radius
+        .per_table
+        .iter()
+        .find(|t| t.table_name == "orders")
+        .unwrap();
+
+    assert_eq!(orders_blast.strongest_lock, LockMode::Share);
+    assert_eq!(orders_blast.blocked_queries.len(), 1);
+    assert!(orders_blast.blocked_queries[0].query_label.contains("INSERT"));
 }
 
 #[test]

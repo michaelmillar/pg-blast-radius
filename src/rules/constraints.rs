@@ -1,5 +1,6 @@
 use pg_query::protobuf::{self, node, ConstrType};
 
+use crate::forecast;
 use crate::recipe;
 use crate::types::*;
 
@@ -10,7 +11,7 @@ pub fn analyse_add_constraint(
     table: &str,
     table_bytes: Option<i64>,
     stmt_sql: &str,
-    _ctx: &RuleContext,
+    ctx: &RuleContext,
 ) -> Vec<Finding> {
     let constraint = match cmd.def.as_ref().and_then(|d| d.node.as_ref()) {
         Some(node::Node::Constraint(c)) => c,
@@ -26,12 +27,12 @@ pub fn analyse_add_constraint(
     let not_valid = constraint.skip_validation;
 
     match contype {
-        ConstrType::ConstrCheck => analyse_check(table, &con_name, not_valid, table_bytes, stmt_sql),
+        ConstrType::ConstrCheck => analyse_check(table, &con_name, not_valid, table_bytes, stmt_sql, ctx),
         ConstrType::ConstrForeign => {
-            analyse_foreign_key(table, &con_name, not_valid, constraint, table_bytes, stmt_sql)
+            analyse_foreign_key(table, &con_name, not_valid, constraint, table_bytes, stmt_sql, ctx)
         }
-        ConstrType::ConstrUnique => analyse_unique(table, &con_name, table_bytes, stmt_sql),
-        ConstrType::ConstrPrimary => analyse_primary_key(table, &con_name, table_bytes, stmt_sql),
+        ConstrType::ConstrUnique => analyse_unique(table, &con_name, table_bytes, stmt_sql, ctx),
+        ConstrType::ConstrPrimary => analyse_primary_key(table, &con_name, table_bytes, stmt_sql, ctx),
         _ => vec![],
     }
 }
@@ -42,12 +43,15 @@ fn analyse_check(
     not_valid: bool,
     table_bytes: Option<i64>,
     stmt_sql: &str,
+    ctx: &RuleContext,
 ) -> Vec<Finding> {
     if not_valid {
         vec![Finding {
             rule_id: "add-check-not-valid".into(),
             risk_level: RiskLevel::Low,
-            confidence: Confidence::Definite,
+            confidence: ConfidenceLedger::static_only(
+                vec!["ACCESS EXCLUSIVE lock for ADD CHECK NOT VALID (brief, no scan)".into()],
+            ),
             lock_mode: LockMode::AccessExclusive,
             rewrite: RewriteRisk::None,
             affected_table: Some(table.into()),
@@ -59,18 +63,21 @@ fn analyse_check(
             recipe: None,
             pg_version_note: None,
             statement_sql: stmt_sql.into(),
-            estimated_duration: None,
-            assumptions: vec![],
+            duration_forecast: None,
         }]
     } else {
         let risk = adjust_risk_for_size(RiskLevel::High, table_bytes);
         vec![Finding {
             rule_id: "add-check-constraint".into(),
             risk_level: risk,
-            confidence: if table_bytes.is_some() {
-                Confidence::Definite
-            } else {
-                Confidence::NeedsCatalog
+            confidence: match table_bytes {
+                Some(b) => ConfidenceLedger::with_catalog(
+                    vec!["ACCESS EXCLUSIVE lock with full table scan for CHECK validation".into()],
+                    vec![format!("table size is {}", human_size(b))],
+                ),
+                None => ConfidenceLedger::static_only(
+                    vec!["ACCESS EXCLUSIVE lock with full table scan for CHECK validation".into()],
+                ),
             },
             lock_mode: LockMode::AccessExclusive,
             rewrite: RewriteRisk::None,
@@ -84,8 +91,7 @@ fn analyse_check(
             recipe: Some(recipe::add_check_safe(table, con_name, "<check_expression>")),
             pg_version_note: None,
             statement_sql: stmt_sql.into(),
-            estimated_duration: table_bytes.map(estimate_scan_duration),
-            assumptions: vec![],
+            duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline)),
         }]
     }
 }
@@ -97,6 +103,7 @@ fn analyse_foreign_key(
     constraint: &protobuf::Constraint,
     table_bytes: Option<i64>,
     stmt_sql: &str,
+    ctx: &RuleContext,
 ) -> Vec<Finding> {
     let ref_table = constraint
         .pktable
@@ -114,7 +121,9 @@ fn analyse_foreign_key(
         vec![Finding {
             rule_id: "add-foreign-key-not-valid".into(),
             risk_level: RiskLevel::Medium,
-            confidence: Confidence::Definite,
+            confidence: ConfidenceLedger::static_only(
+                vec!["SHARE ROW EXCLUSIVE lock on both tables (brief, NOT VALID skips scan)".into()],
+            ),
             lock_mode: LockMode::ShareRowExclusive,
             rewrite: RewriteRisk::None,
             affected_table: Some(table.into()),
@@ -129,18 +138,21 @@ fn analyse_foreign_key(
             recipe: None,
             pg_version_note: None,
             statement_sql: stmt_sql.into(),
-            estimated_duration: None,
-            assumptions: vec![],
+            duration_forecast: None,
         }]
     } else {
         let risk = adjust_risk_for_size(RiskLevel::High, table_bytes);
         vec![Finding {
             rule_id: "add-foreign-key".into(),
             risk_level: risk,
-            confidence: if table_bytes.is_some() {
-                Confidence::Definite
-            } else {
-                Confidence::NeedsCatalog
+            confidence: match table_bytes {
+                Some(b) => ConfidenceLedger::with_catalog(
+                    vec!["SHARE ROW EXCLUSIVE lock with full scan for FK validation".into()],
+                    vec![format!("table size is {}", human_size(b))],
+                ),
+                None => ConfidenceLedger::static_only(
+                    vec!["SHARE ROW EXCLUSIVE lock with full scan for FK validation".into()],
+                ),
             },
             lock_mode: LockMode::ShareRowExclusive,
             rewrite: RewriteRisk::None,
@@ -156,12 +168,11 @@ fn analyse_foreign_key(
             recipe: Some(recipe::add_foreign_key_safe(
                 table,
                 con_name,
-                &stmt_sql.trim_end_matches(';'),
+                stmt_sql.trim_end_matches(';'),
             )),
             pg_version_note: None,
             statement_sql: stmt_sql.into(),
-            estimated_duration: table_bytes.map(estimate_scan_duration),
-            assumptions: vec![],
+            duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline)),
         }]
     }
 }
@@ -171,15 +182,20 @@ fn analyse_unique(
     con_name: &str,
     table_bytes: Option<i64>,
     stmt_sql: &str,
+    ctx: &RuleContext,
 ) -> Vec<Finding> {
     let risk = adjust_risk_for_size(RiskLevel::High, table_bytes);
     vec![Finding {
         rule_id: "add-unique-constraint".into(),
         risk_level: risk,
-        confidence: if table_bytes.is_some() {
-            Confidence::Definite
-        } else {
-            Confidence::NeedsCatalog
+        confidence: match table_bytes {
+            Some(b) => ConfidenceLedger::with_catalog(
+                vec!["ACCESS EXCLUSIVE lock with implicit index build for UNIQUE".into()],
+                vec![format!("table size is {}", human_size(b))],
+            ),
+            None => ConfidenceLedger::static_only(
+                vec!["ACCESS EXCLUSIVE lock with implicit index build for UNIQUE".into()],
+            ),
         },
         lock_mode: LockMode::AccessExclusive,
         rewrite: RewriteRisk::None,
@@ -195,8 +211,7 @@ fn analyse_unique(
         recipe: None,
         pg_version_note: None,
         statement_sql: stmt_sql.into(),
-        estimated_duration: table_bytes.map(estimate_index_build_duration),
-        assumptions: vec![],
+        duration_forecast: table_bytes.map(|b| forecast::forecast_index_build(b, ctx.transaction_baseline)),
     }]
 }
 
@@ -205,15 +220,20 @@ fn analyse_primary_key(
     con_name: &str,
     table_bytes: Option<i64>,
     stmt_sql: &str,
+    ctx: &RuleContext,
 ) -> Vec<Finding> {
     let risk = adjust_risk_for_size(RiskLevel::High, table_bytes);
     vec![Finding {
         rule_id: "add-primary-key".into(),
         risk_level: risk,
-        confidence: if table_bytes.is_some() {
-            Confidence::Definite
-        } else {
-            Confidence::NeedsCatalog
+        confidence: match table_bytes {
+            Some(b) => ConfidenceLedger::with_catalog(
+                vec!["ACCESS EXCLUSIVE lock with index build and NOT NULL scan for PRIMARY KEY".into()],
+                vec![format!("table size is {}", human_size(b))],
+            ),
+            None => ConfidenceLedger::static_only(
+                vec!["ACCESS EXCLUSIVE lock with index build and NOT NULL scan for PRIMARY KEY".into()],
+            ),
         },
         lock_mode: LockMode::AccessExclusive,
         rewrite: RewriteRisk::None,
@@ -227,8 +247,7 @@ fn analyse_primary_key(
         recipe: None,
         pg_version_note: None,
         statement_sql: stmt_sql.into(),
-        estimated_duration: table_bytes.map(estimate_index_build_duration),
-        assumptions: vec![],
+        duration_forecast: table_bytes.map(|b| forecast::forecast_index_build(b, ctx.transaction_baseline)),
     }]
 }
 
@@ -237,16 +256,21 @@ pub fn analyse_validate_constraint(
     table: &str,
     table_bytes: Option<i64>,
     stmt_sql: &str,
+    ctx: &RuleContext,
 ) -> Finding {
     let con_name = &cmd.name;
 
     Finding {
         rule_id: "validate-constraint".into(),
         risk_level: adjust_risk_for_size(RiskLevel::Low, table_bytes),
-        confidence: if table_bytes.is_some() {
-            Confidence::Definite
-        } else {
-            Confidence::NeedsCatalog
+        confidence: match table_bytes {
+            Some(b) => ConfidenceLedger::with_catalog(
+                vec!["SHARE UPDATE EXCLUSIVE lock (non-blocking) for VALIDATE CONSTRAINT".into()],
+                vec![format!("table size is {}", human_size(b))],
+            ),
+            None => ConfidenceLedger::static_only(
+                vec!["SHARE UPDATE EXCLUSIVE lock (non-blocking) for VALIDATE CONSTRAINT".into()],
+            ),
         },
         lock_mode: LockMode::ShareUpdateExclusive,
         rewrite: RewriteRisk::None,
@@ -265,7 +289,6 @@ pub fn analyse_validate_constraint(
         recipe: None,
         pg_version_note: None,
         statement_sql: stmt_sql.into(),
-        estimated_duration: table_bytes.map(estimate_scan_duration),
-        assumptions: vec![],
+        duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline)),
     }
 }

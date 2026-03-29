@@ -7,52 +7,71 @@ pub fn render(results: &[AnalysisResult]) {
         println!("{}", result.file.bold());
         println!();
 
-        if !result.blast_radius.per_table.is_empty() {
-            println!("  {}", "Blast Radius".underline());
-            for t in &result.blast_radius.per_table {
-                let lock_str = format!("{}", t.strongest_lock);
-                let coloured_lock = if t.blocks_reads {
-                    lock_str.red().to_string()
-                } else if t.blocks_writes {
-                    lock_str.yellow().to_string()
-                } else {
-                    lock_str.green().to_string()
-                };
+        for t in &result.blast_radius.per_table {
+            let size_info = t
+                .table_size
+                .as_ref()
+                .map(|s| format!(" ({}, ~{} rows)", s.human_size, s.row_estimate))
+                .unwrap_or_default();
 
-                let size_info = t
-                    .table_size
-                    .as_ref()
-                    .map(|s| format!(" ({}, ~{} rows)", s.human_size, s.row_estimate))
-                    .unwrap_or_default();
+            println!("  {}{}", t.table_name.bold(), size_info.dimmed());
 
-                let stmt_info = if t.statement_count > 1 {
-                    format!(" ({} statements combined)", t.statement_count)
-                } else {
-                    String::new()
-                };
+            let lock_str = format!("{}", t.strongest_lock);
+            let lock_display = if t.blocks_reads {
+                format!("{} (blocks all reads and writes)", lock_str.red())
+            } else if t.blocks_writes {
+                format!("{} (blocks writes)", lock_str.yellow())
+            } else {
+                format!("{} (non-blocking)", lock_str.green())
+            };
+            println!("    Lock: {lock_display}");
 
+            if let Some(ref dur) = t.duration_forecast {
+                println!("    Duration: {}", format!("{dur}").bold());
+            } else if t.table_size.is_none() {
                 println!(
-                    "    {}{} -> {}{}",
-                    t.table_name.bold(),
-                    size_info.dimmed(),
-                    coloured_lock,
-                    stmt_info
+                    "    Duration: {}",
+                    "unknown (use --dsn or --stats-file for size-aware estimates)".dimmed()
                 );
-
-                if t.blocks_reads {
-                    println!("      Blocks: {}", "all reads and writes".red());
-                } else if t.blocks_writes {
-                    println!("      Blocks: {}", "writes (reads OK)".yellow());
-                }
-
-                if let Some(ref dur) = t.estimated_total_duration {
-                    println!("      Estimated duration: {}", format!("{dur}").bold());
-                }
-
-                if let Some(ref rec) = t.recommendation {
-                    println!("      {}", rec.yellow());
-                }
             }
+
+            if !t.blocked_queries.is_empty() {
+                let total_qpm: f64 = t.blocked_queries.iter().map(|bq| bq.calls_per_sec * 60.0).sum();
+                println!(
+                    "    Blocked queries: {} families, {:.0} calls/min combined",
+                    t.blocked_queries.len(),
+                    total_qpm,
+                );
+                for bq in &t.blocked_queries {
+                    println!(
+                        "      {}  {}{:.0}/min  ~{} queued (p50)",
+                        bq.query_label.dimmed(),
+                        " ".repeat(max_label_pad(&t.blocked_queries, &bq.query_label)),
+                        bq.calls_per_sec * 60.0,
+                        bq.queued_at_p50,
+                    );
+                }
+            } else if t.total_blocked_qps == 0.0 && t.confidence.grade < ConfidenceGrade::Measured
+                && (t.blocks_reads || t.blocks_writes) {
+                    println!(
+                        "    Blocked queries: {}",
+                        "unknown (use --dsn for workload-aware analysis)".dimmed()
+                    );
+                }
+
+            render_confidence(&t.confidence);
+
+            if t.statement_count > 1 {
+                println!(
+                    "    {} statements combined",
+                    format!("{}", t.statement_count).bold()
+                );
+            }
+
+            if let Some(ref rec) = t.recommendation {
+                println!("    {}", rec.yellow());
+            }
+
             println!();
         }
 
@@ -66,18 +85,12 @@ pub fn render(results: &[AnalysisResult]) {
             );
             println!("    {}", finding.explanation.dimmed());
 
-            if let Some(ref dur) = finding.estimated_duration {
+            if let Some(ref dur) = finding.duration_forecast {
                 println!("    Estimated: {}", format!("{dur}").bold());
             }
 
             if let Some(ref note) = finding.pg_version_note {
                 println!("    {}: {}", "PG version note".cyan(), note);
-            }
-
-            if !finding.assumptions.is_empty() {
-                for a in &finding.assumptions {
-                    println!("    {}: {}", "Assumption".dimmed(), a.dimmed());
-                }
             }
 
             if let Some(ref recipe) = finding.recipe {
@@ -126,27 +139,58 @@ pub fn render(results: &[AnalysisResult]) {
             );
         }
 
-        if !result.assumptions.is_empty() {
-            for a in &result.assumptions {
-                println!("  {}: {}", "Assumption".dimmed(), a.dimmed());
-            }
-        }
-
-        if result.overall_confidence <= Confidence::NeedsCatalog
-            && !result
-                .blast_radius
-                .per_table
-                .iter()
-                .any(|t| t.table_size.is_some())
-        {
+        if result.overall_confidence == ConfidenceGrade::Static {
             println!(
                 "  {}",
-                "Use --dsn for table-size-aware analysis.".dimmed()
+                "Use --dsn for workload-aware blast radius analysis.".dimmed()
+            );
+        } else if result.overall_confidence == ConfidenceGrade::Estimated {
+            println!(
+                "  {}",
+                "Use --dsn for blocked query forecasting (pg_stat_statements required).".dimmed()
             );
         }
 
         println!();
     }
+}
+
+fn render_confidence(ledger: &ConfidenceLedger) {
+    let parts: Vec<String> = [
+        if !ledger.from_catalog.is_empty() {
+            Some("table size KNOWN".into())
+        } else if ledger.unknowns.iter().any(|u| u.contains("table size")) {
+            Some("table size UNKNOWN".into())
+        } else {
+            None
+        },
+        if !ledger.from_stats.is_empty() {
+            Some("query load MEASURED".into())
+        } else if ledger.unknowns.iter().any(|u| u.contains("query load")) {
+            Some("query load UNKNOWN".into())
+        } else {
+            None
+        },
+        if ledger.grade == ConfidenceGrade::Measured {
+            Some("lock hold INFERRED".into())
+        } else if ledger.grade == ConfidenceGrade::Estimated {
+            Some("lock hold ESTIMATED".into())
+        } else {
+            None
+        },
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
+    if !parts.is_empty() {
+        println!("    Confidence: {}", parts.join(", ").dimmed());
+    }
+}
+
+fn max_label_pad(blocked: &[BlockedQueryForecast], current_label: &str) -> usize {
+    let max_len = blocked.iter().map(|bq| bq.query_label.len()).max().unwrap_or(0);
+    max_len.saturating_sub(current_label.len()) + 2
 }
 
 fn risk_badge(level: RiskLevel) -> String {

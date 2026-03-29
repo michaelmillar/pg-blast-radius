@@ -1,5 +1,6 @@
 use pg_query::protobuf::{self, node, AlterTableType, ConstrType};
 
+use crate::forecast;
 use crate::parse::format_relation;
 use crate::recipe;
 use crate::types::*;
@@ -38,7 +39,9 @@ pub fn analyse_alter_table(
                 findings.push(Finding {
                     rule_id: "drop-column".into(),
                     risk_level: RiskLevel::Medium,
-                    confidence: Confidence::Definite,
+                    confidence: ConfidenceLedger::static_only(
+                        vec!["ACCESS EXCLUSIVE lock for DROP COLUMN (brief, catalog only)".into()],
+                    ),
                     lock_mode: LockMode::AccessExclusive,
                     rewrite: RewriteRisk::None,
                     affected_table: Some(table.clone()),
@@ -50,8 +53,7 @@ pub fn analyse_alter_table(
                     recipe: Some(recipe::drop_column(&table, &cmd.name)),
                     pg_version_note: None,
                     statement_sql: stmt_sql.into(),
-                    estimated_duration: None,
-                    assumptions: vec![],
+                    duration_forecast: None,
                 });
             }
             AlterTableType::AtSetNotNull => {
@@ -67,7 +69,7 @@ pub fn analyse_alter_table(
             }
             AlterTableType::AtValidateConstraint => {
                 findings.push(
-                    super::constraints::analyse_validate_constraint(cmd, &table, table_bytes, stmt_sql),
+                    super::constraints::analyse_validate_constraint(cmd, &table, table_bytes, stmt_sql, ctx),
                 );
             }
             AlterTableType::AtAttachPartition => {
@@ -75,10 +77,14 @@ pub fn analyse_alter_table(
                 findings.push(Finding {
                     rule_id: "attach-partition".into(),
                     risk_level: risk,
-                    confidence: if table_bytes.is_some() {
-                        Confidence::Definite
-                    } else {
-                        Confidence::NeedsCatalog
+                    confidence: match table_bytes {
+                        Some(b) => ConfidenceLedger::with_catalog(
+                            vec!["SHARE UPDATE EXCLUSIVE on parent, ACCESS EXCLUSIVE on partition".into()],
+                            vec![format!("table size is {}", human_size(b))],
+                        ),
+                        None => ConfidenceLedger::static_only(
+                            vec!["SHARE UPDATE EXCLUSIVE on parent, ACCESS EXCLUSIVE on partition".into()],
+                        ),
                     },
                     lock_mode: LockMode::ShareUpdateExclusive,
                     rewrite: RewriteRisk::None,
@@ -91,8 +97,7 @@ pub fn analyse_alter_table(
                     recipe: Some(recipe::attach_partition_safe(&table)),
                     pg_version_note: None,
                     statement_sql: stmt_sql.into(),
-                    estimated_duration: table_bytes.map(estimate_scan_duration),
-                    assumptions: vec![],
+                    duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline)),
                 });
             }
             _ => {}
@@ -124,7 +129,9 @@ fn analyse_add_column(
         return vec![Finding {
             rule_id: "add-column".into(),
             risk_level: RiskLevel::Low,
-            confidence: Confidence::Definite,
+            confidence: ConfidenceLedger::static_only(
+                vec!["ACCESS EXCLUSIVE lock for ADD COLUMN (metadata only, milliseconds)".into()],
+            ),
             lock_mode: LockMode::AccessExclusive,
             rewrite: RewriteRisk::None,
             affected_table: Some(table.into()),
@@ -135,8 +142,7 @@ fn analyse_add_column(
             recipe: None,
             pg_version_note: None,
             statement_sql: stmt_sql.into(),
-            estimated_duration: None,
-            assumptions: vec![],
+            duration_forecast: None,
         }];
     }
 
@@ -145,10 +151,14 @@ fn analyse_add_column(
         return vec![Finding {
             rule_id: "add-column-volatile-default".into(),
             risk_level: risk,
-            confidence: if table_bytes.is_some() {
-                Confidence::Definite
-            } else {
-                Confidence::NeedsCatalog
+            confidence: match table_bytes {
+                Some(b) => ConfidenceLedger::with_catalog(
+                    vec!["volatile DEFAULT forces full table rewrite under ACCESS EXCLUSIVE".into()],
+                    vec![format!("table size is {}", human_size(b))],
+                ),
+                None => ConfidenceLedger::static_only(
+                    vec!["volatile DEFAULT forces full table rewrite under ACCESS EXCLUSIVE".into()],
+                ),
             },
             lock_mode: LockMode::AccessExclusive,
             rewrite: RewriteRisk::Required,
@@ -165,8 +175,7 @@ fn analyse_add_column(
                 "Volatile defaults always trigger a rewrite regardless of PG version.".into(),
             ),
             statement_sql: stmt_sql.into(),
-            estimated_duration: table_bytes.map(estimate_rewrite_duration),
-            assumptions: vec![],
+            duration_forecast: table_bytes.map(|b| forecast::forecast_rewrite(b, ctx.transaction_baseline)),
         }];
     }
 
@@ -174,7 +183,12 @@ fn analyse_add_column(
         let mut findings = vec![Finding {
             rule_id: "add-column-default".into(),
             risk_level: RiskLevel::Low,
-            confidence: Confidence::Definite,
+            confidence: ConfidenceLedger::static_only(
+                vec![
+                    "non-volatile DEFAULT on PG 11+ is metadata only".into(),
+                    format!("PostgreSQL {} assumed", ctx.pg_version.major),
+                ],
+            ),
             lock_mode: LockMode::AccessExclusive,
             rewrite: RewriteRisk::None,
             affected_table: Some(table.into()),
@@ -189,15 +203,16 @@ fn analyse_add_column(
                 "On PG < 11 this would trigger a full table rewrite.".into(),
             ),
             statement_sql: stmt_sql.into(),
-            estimated_duration: None,
-            assumptions: vec![format!("PostgreSQL {} assumed", ctx.pg_version.major)],
+            duration_forecast: None,
         }];
 
         if has_not_null {
             findings.push(Finding {
                 rule_id: "add-column-not-null".into(),
                 risk_level: RiskLevel::Low,
-                confidence: Confidence::Definite,
+                confidence: ConfidenceLedger::static_only(
+                    vec!["NOT NULL with non-volatile DEFAULT safe on PG 11+ (no scan)".into()],
+                ),
                 lock_mode: LockMode::AccessExclusive,
                 rewrite: RewriteRisk::None,
                 affected_table: Some(table.into()),
@@ -211,8 +226,7 @@ fn analyse_add_column(
                 recipe: None,
                 pg_version_note: None,
                 statement_sql: stmt_sql.into(),
-                estimated_duration: None,
-                assumptions: vec![],
+                duration_forecast: None,
             });
         }
 
@@ -223,10 +237,20 @@ fn analyse_add_column(
     vec![Finding {
         rule_id: "add-column-default".into(),
         risk_level: risk,
-        confidence: if table_bytes.is_some() {
-            Confidence::Definite
-        } else {
-            Confidence::NeedsCatalog
+        confidence: match table_bytes {
+            Some(b) => ConfidenceLedger::with_catalog(
+                vec![
+                    "PG < 11 rewrites table for any DEFAULT under ACCESS EXCLUSIVE".into(),
+                    format!("PostgreSQL {} assumed", ctx.pg_version.major),
+                ],
+                vec![format!("table size is {}", human_size(b))],
+            ),
+            None => ConfidenceLedger::static_only(
+                vec![
+                    "PG < 11 rewrites table for any DEFAULT under ACCESS EXCLUSIVE".into(),
+                    format!("PostgreSQL {} assumed", ctx.pg_version.major),
+                ],
+            ),
         },
         lock_mode: LockMode::AccessExclusive,
         rewrite: RewriteRisk::Conditional {
@@ -242,8 +266,7 @@ fn analyse_add_column(
         recipe: None,
         pg_version_note: Some("Upgrade to PG 11+ to avoid this rewrite.".into()),
         statement_sql: stmt_sql.into(),
-        estimated_duration: table_bytes.map(estimate_rewrite_duration),
-        assumptions: vec![format!("PostgreSQL {} assumed", ctx.pg_version.major)],
+        duration_forecast: table_bytes.map(|b| forecast::forecast_rewrite(b, ctx.transaction_baseline)),
     }]
 }
 
@@ -276,10 +299,20 @@ fn analyse_set_not_null(
     Finding {
         rule_id: "set-not-null".into(),
         risk_level: risk,
-        confidence: if table_bytes.is_some() {
-            Confidence::Definite
-        } else {
-            Confidence::NeedsCatalog
+        confidence: match table_bytes {
+            Some(b) => ConfidenceLedger::with_catalog(
+                vec![
+                    "ACCESS EXCLUSIVE lock with full table scan for SET NOT NULL".into(),
+                    format!("PostgreSQL {} assumed", ctx.pg_version.major),
+                ],
+                vec![format!("table size is {}", human_size(b))],
+            ),
+            None => ConfidenceLedger::static_only(
+                vec![
+                    "ACCESS EXCLUSIVE lock with full table scan for SET NOT NULL".into(),
+                    format!("PostgreSQL {} assumed", ctx.pg_version.major),
+                ],
+            ),
         },
         lock_mode: LockMode::AccessExclusive,
         rewrite: RewriteRisk::None,
@@ -293,8 +326,7 @@ fn analyse_set_not_null(
             None
         },
         statement_sql: stmt_sql.into(),
-        estimated_duration: table_bytes.map(estimate_scan_duration),
-        assumptions: vec![format!("PostgreSQL {} assumed", ctx.pg_version.major)],
+        duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline)),
     }
 }
 
@@ -303,7 +335,7 @@ fn analyse_alter_type(
     table: &str,
     table_bytes: Option<i64>,
     stmt_sql: &str,
-    _ctx: &RuleContext,
+    ctx: &RuleContext,
 ) -> Finding {
     let column = &cmd.name;
 
@@ -324,10 +356,14 @@ fn analyse_alter_type(
         Finding {
             rule_id: "change-column-type".into(),
             risk_level: risk,
-            confidence: if table_bytes.is_some() {
-                Confidence::Definite
-            } else {
-                Confidence::NeedsCatalog
+            confidence: match table_bytes {
+                Some(b) => ConfidenceLedger::with_catalog(
+                    vec!["type change requires full table rewrite under ACCESS EXCLUSIVE".into()],
+                    vec![format!("table size is {}", human_size(b))],
+                ),
+                None => ConfidenceLedger::static_only(
+                    vec!["type change requires full table rewrite under ACCESS EXCLUSIVE".into()],
+                ),
             },
             lock_mode: LockMode::AccessExclusive,
             rewrite: RewriteRisk::Required,
@@ -343,16 +379,15 @@ fn analyse_alter_type(
             recipe: Some(recipe::change_column_type(table, column, &new_type)),
             pg_version_note: None,
             statement_sql: stmt_sql.into(),
-            estimated_duration: table_bytes.map(estimate_rewrite_duration),
-            assumptions: vec![
-                "Rewrite assumed because target type has a different binary format".into(),
-            ],
+            duration_forecast: table_bytes.map(|b| forecast::forecast_rewrite(b, ctx.transaction_baseline)),
         }
     } else {
         Finding {
             rule_id: "change-column-type".into(),
             risk_level: RiskLevel::Low,
-            confidence: Confidence::Definite,
+            confidence: ConfidenceLedger::static_only(
+                vec!["no rewrite needed, ACCESS EXCLUSIVE lock is brief (catalog only)".into()],
+            ),
             lock_mode: LockMode::AccessExclusive,
             rewrite: RewriteRisk::None,
             affected_table: Some(table.into()),
@@ -366,8 +401,7 @@ fn analyse_alter_type(
             recipe: None,
             pg_version_note: None,
             statement_sql: stmt_sql.into(),
-            estimated_duration: None,
-            assumptions: vec![],
+            duration_forecast: None,
         }
     }
 }
@@ -441,13 +475,11 @@ fn find_default_expr(col_def: &protobuf::ColumnDef) -> Option<&protobuf::Node> {
         return Some(rd.as_ref());
     }
     for c in &col_def.constraints {
-        if let Some(node::Node::Constraint(con)) = c.node.as_ref() {
-            if ConstrType::try_from(con.contype) == Ok(ConstrType::ConstrDefault) {
-                if let Some(ref expr) = con.raw_expr {
+        if let Some(node::Node::Constraint(con)) = c.node.as_ref()
+            && ConstrType::try_from(con.contype) == Ok(ConstrType::ConstrDefault)
+                && let Some(ref expr) = con.raw_expr {
                     return Some(expr.as_ref());
                 }
-            }
-        }
     }
     None
 }

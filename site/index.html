@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pg-blast-radius</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1b26;
+    --border: #292e42;
+    --fg: #c0caf5;
+    --dim: #565f89;
+    --blue: #7aa2f7;
+    --green: #9ece6a;
+    --red: #f7768e;
+    --orange: #e0af68;
+    --cyan: #7dcfff;
+    --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    line-height: 1.6;
+  }
+  .container { max-width: 800px; margin: 0 auto; padding: 0 24px; }
+
+  header {
+    text-align: center;
+    padding: 80px 0 40px;
+  }
+  header h1 {
+    font-size: 48px;
+    font-weight: 700;
+    color: var(--blue);
+    letter-spacing: -1px;
+  }
+  header p {
+    font-size: 18px;
+    color: var(--dim);
+    margin-top: 12px;
+    max-width: 540px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .links {
+    margin-top: 24px;
+  }
+  .links a {
+    display: inline-block;
+    padding: 10px 24px;
+    background: var(--blue);
+    color: var(--bg);
+    text-decoration: none;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 14px;
+    margin: 0 6px;
+  }
+  .links a.secondary {
+    background: var(--surface);
+    color: var(--fg);
+    border: 1px solid var(--border);
+  }
+
+  .terminal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    margin: 48px 0;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.6;
+  }
+  .terminal .prompt { color: var(--green); }
+  .terminal .cmd { color: var(--fg); }
+  .terminal .table-name { color: var(--fg); font-weight: bold; }
+  .terminal .dim { color: var(--dim); }
+  .terminal .lock-red { color: var(--red); }
+  .terminal .lock-yellow { color: var(--orange); }
+  .terminal .bold { font-weight: bold; }
+  .terminal .badge-extreme { background: var(--red); color: var(--bg); padding: 1px 6px; border-radius: 3px; font-weight: bold; }
+  .terminal .cyan { color: var(--cyan); }
+  .terminal .green { color: var(--green); font-weight: bold; }
+
+  section {
+    padding: 48px 0;
+  }
+  section h2 {
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 16px;
+    color: var(--fg);
+  }
+  section p {
+    color: var(--dim);
+    font-size: 16px;
+    margin-bottom: 12px;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 24px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+  }
+  .card h3 {
+    font-size: 16px;
+    color: var(--blue);
+    margin-bottom: 8px;
+  }
+  .card p {
+    font-size: 14px;
+    color: var(--dim);
+    margin: 0;
+  }
+
+  .install {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 24px;
+    font-family: var(--mono);
+    font-size: 14px;
+    margin-top: 16px;
+  }
+
+  footer {
+    text-align: center;
+    padding: 48px 0;
+    color: var(--dim);
+    font-size: 14px;
+  }
+  footer a { color: var(--blue); text-decoration: none; }
+
+  @media (max-width: 640px) {
+    header h1 { font-size: 32px; }
+    .grid { grid-template-columns: 1fr; }
+    .terminal { font-size: 11px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>pg-blast-radius</h1>
+  <p>Forecast what your PostgreSQL migration will block, for how long, on your actual workload.</p>
+  <div class="links">
+    <a href="https://github.com/michaelmillar/pg-blast-radius">GitHub</a>
+    <a href="https://github.com/michaelmillar/pg-blast-radius#quick-start" class="secondary">Quick start</a>
+  </div>
+</header>
+
+<div class="container">
+  <video autoplay loop muted playsinline style="width:100%;border-radius:8px;border:1px solid var(--border);margin-bottom:48px">
+    <source src="https://github.com/user-attachments/assets/ee5c219c-5be6-4a9f-afe6-a2a8debff332" type="video/mp4">
+  </video>
+</div>
+
+<div class="container">
+
+<div class="terminal">
+<span class="prompt">$</span> <span class="cmd">pg-blast-radius analyse migration.sql --stats-file prod-stats.json</span>
+
+<br><br>
+  <span class="table-name">orders</span> <span class="dim">(34.0 GB, ~892M rows)</span>
+<br>    Lock: <span class="lock-red">ACCESS EXCLUSIVE</span> (blocks all reads and writes)
+<br>    Duration: <span class="bold">16m (p50)  37m (p90)  37m (worst)</span>
+<br>    Blocked queries: 3 families, 14,202 calls/min combined
+<br>      <span class="dim">SELECT ... FROM orders WHERE customer_id = $1</span>   8,100/min  ~129,255 queued
+<br>      <span class="dim">INSERT INTO orders (...)</span>                        4,800/min   ~76,596 queued
+<br>      <span class="dim">UPDATE orders SET status = $1 WHERE id = $2</span>     1,302/min   ~20,777 queued
+<br>    Confidence: <span class="dim">query load MEASURED, lock hold INFERRED</span>
+<br>
+<br>  <span class="badge-extreme">EXTREME</span> ALTER COLUMN TYPE triggers table rewrite
+<br>    <span class="dim">Estimated: 6m (p50) / 12m (p90)</span>
+<br>
+<br>    <span class="green">Rollout recipe:</span> Expand/migrate/contract
+<br>      1. <span class="cyan">[expand]</span> ADD COLUMN "total_new" numeric
+<br>      2. <span class="cyan">[backfill]</span> UPDATE in batches
+<br>      3. <span class="cyan">[switch]</span> Application reads from new column
+<br>      4. <span class="cyan">[contract]</span> DROP old column, rename
+</div>
+
+<section>
+  <h2>Not a linter. Not a runner.</h2>
+  <p>Linters tell you "this takes ACCESS EXCLUSIVE." pg-blast-radius tells you "this will queue 14,200 queries/min on your busiest table for 6..12 minutes."</p>
+  <p>It reads your migration SQL, connects read-only to your database, and produces workload-aware blast radius forecasts with explicit confidence accounting.</p>
+</section>
+
+<section>
+  <div class="grid">
+    <div class="card">
+      <h3>Blocked query forecast</h3>
+      <p>Identifies which production queries from pg_stat_statements will be blocked, calculates queue depth per second, and ranks by impact.</p>
+    </div>
+    <div class="card">
+      <h3>Duration ranges</h3>
+      <p>P50, P90, and worst-case estimates based on table size and observed transaction durations. Not single-point guesses.</p>
+    </div>
+    <div class="card">
+      <h3>Confidence ledger</h3>
+      <p>Every forecast states what is known from PG docs, observed from catalog, inferred from workload, and what remains assumed.</p>
+    </div>
+    <div class="card">
+      <h3>Rollout recipes</h3>
+      <p>Step-by-step safer SQL using expand/contract patterns. Each step tagged with its phase and lock impact.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Install</h2>
+  <div class="install">
+    cargo install pg-blast-radius
+  </div>
+  <p style="margin-top: 12px">Requires Rust 1.85+ and a C compiler for libpg_query. Read-only database connection for full analysis.</p>
+</section>
+
+<section>
+  <h2>Three modes</h2>
+  <p><strong>Static</strong> (no database): lock modes, rewrite detection, rollout recipes. Confidence: STATIC.</p>
+  <p><strong>Catalog-aware</strong> (table sizes): size-adjusted risk, P50/P90/worst duration forecasts. Confidence: ESTIMATED.</p>
+  <p><strong>Workload-aware</strong> (pg_stat_statements + pg_stat_activity): blocked query families, queue depth estimates, lock acquisition delay. Confidence: MEASURED.</p>
+</section>
+
+</div>
+
+<footer>
+  <a href="https://github.com/michaelmillar/pg-blast-radius">GitHub</a> &middot; MIT Licence
+</footer>
+
+</body>
+</html>

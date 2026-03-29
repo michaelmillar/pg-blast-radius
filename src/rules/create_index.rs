@@ -1,5 +1,6 @@
 use pg_query::protobuf;
 
+use crate::forecast;
 use crate::parse::format_relation;
 use crate::recipe;
 use crate::types::*;
@@ -30,10 +31,14 @@ pub fn analyse_index_stmt(
         vec![Finding {
             rule_id: "create-index-concurrently".into(),
             risk_level: risk,
-            confidence: if table_bytes.is_some() {
-                Confidence::Definite
-            } else {
-                Confidence::NeedsCatalog
+            confidence: match table_bytes {
+                Some(b) => ConfidenceLedger::with_catalog(
+                    vec!["SHARE UPDATE EXCLUSIVE lock (non-blocking) for CREATE INDEX CONCURRENTLY".into()],
+                    vec![format!("table size is {}", human_size(b))],
+                ),
+                None => ConfidenceLedger::static_only(
+                    vec!["SHARE UPDATE EXCLUSIVE lock (non-blocking) for CREATE INDEX CONCURRENTLY".into()],
+                ),
             },
             lock_mode: LockMode::ShareUpdateExclusive,
             rewrite: RewriteRisk::None,
@@ -48,8 +53,7 @@ pub fn analyse_index_stmt(
             recipe: None,
             pg_version_note: None,
             statement_sql: stmt_sql.into(),
-            estimated_duration: table_bytes.map(estimate_index_build_duration),
-            assumptions: vec![],
+            duration_forecast: table_bytes.map(|b| forecast::forecast_index_build(b, ctx.transaction_baseline)),
         }]
     } else {
         let base_risk = RiskLevel::High;
@@ -60,10 +64,14 @@ pub fn analyse_index_stmt(
         vec![Finding {
             rule_id: "create-index".into(),
             risk_level: risk,
-            confidence: if table_bytes.is_some() {
-                Confidence::Definite
-            } else {
-                Confidence::NeedsCatalog
+            confidence: match table_bytes {
+                Some(b) => ConfidenceLedger::with_catalog(
+                    vec!["SHARE lock blocks writes for entire index build duration".into()],
+                    vec![format!("table size is {}", human_size(b))],
+                ),
+                None => ConfidenceLedger::static_only(
+                    vec!["SHARE lock blocks writes for entire index build duration".into()],
+                ),
             },
             lock_mode: LockMode::Share,
             rewrite: RewriteRisk::None,
@@ -82,8 +90,7 @@ pub fn analyse_index_stmt(
             recipe: Some(recipe::create_index_concurrently(&table, &columns, &idx_name)),
             pg_version_note: None,
             statement_sql: stmt_sql.into(),
-            estimated_duration: table_bytes.map(estimate_index_build_duration),
-            assumptions: vec![],
+            duration_forecast: table_bytes.map(|b| forecast::forecast_index_build(b, ctx.transaction_baseline)),
         }]
     }
 }

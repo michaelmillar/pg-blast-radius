@@ -1,0 +1,65 @@
+{
+  "tables": [
+    {"table_name": "orders", "total_bytes": 36507222016, "row_estimate": 892000000},
+    {"table_name": "customers", "total_bytes": 2147483648, "row_estimate": 15000000},
+    {"table_name": "products", "total_bytes": 104857600, "row_estimate": 50000}
+  ],
+  "workload": {
+    "query_families": [
+      {
+        "queryid": 1001,
+        "normalised_sql": "SELECT * FROM orders WHERE customer_id = $1",
+        "label": "SELECT ... FROM orders WHERE customer_id = $1",
+        "tables": ["orders"],
+        "dml_kind": "SELECT",
+        "lock_mode": "ACCESS_SHARE",
+        "calls_per_sec": 135.0,
+        "mean_exec_ms": 12.4,
+        "p95_exec_ms": 38.0
+      },
+      {
+        "queryid": 1002,
+        "normalised_sql": "INSERT INTO orders (customer_id, total, status) VALUES ($1, $2, $3)",
+        "label": "INSERT INTO orders (...)",
+        "tables": ["orders"],
+        "dml_kind": "INSERT",
+        "lock_mode": "ROW_EXCLUSIVE",
+        "calls_per_sec": 80.0,
+        "mean_exec_ms": 3.1,
+        "p95_exec_ms": 9.5
+      },
+      {
+        "queryid": 1003,
+        "normalised_sql": "UPDATE orders SET status = $1 WHERE id = $2",
+        "label": "UPDATE orders SET status = $1 WHERE id = $2",
+        "tables": ["orders"],
+        "dml_kind": "UPDATE",
+        "lock_mode": "ROW_EXCLUSIVE",
+        "calls_per_sec": 21.7,
+        "mean_exec_ms": 8.2,
+        "p95_exec_ms": 22.0
+      },
+      {
+        "queryid": 1004,
+        "normalised_sql": "SELECT * FROM customers WHERE id = $1",
+        "label": "SELECT ... FROM customers WHERE id = $1",
+        "tables": ["customers"],
+        "dml_kind": "SELECT",
+        "lock_mode": "ACCESS_SHARE",
+        "calls_per_sec": 210.0,
+        "mean_exec_ms": 1.8,
+        "p95_exec_ms": 5.2
+      }
+    ],
+    "transaction_baseline": {
+      "active_sessions": 47,
+      "idle_in_transaction": 3,
+      "median_age_ms": 28.0,
+      "p95_age_ms": 180.0,
+      "max_age_ms": 4200.0
+    },
+    "collected_at": "2026-03-29T14:00:00Z",
+    "stats_reset": "2026-03-01T00:00:00Z",
+    "unparseable_queries": 2
+  }
+}

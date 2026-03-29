@@ -5,7 +5,7 @@ use anyhow::Result;
 use crate::types::{TableSize, human_size};
 use super::CatalogInfo;
 
-pub fn fetch_catalog(dsn: &str) -> Result<CatalogInfo> {
+pub fn fetch_catalog(dsn: &str, include_workload: bool) -> Result<CatalogInfo> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -51,6 +51,26 @@ pub fn fetch_catalog(dsn: &str) -> Result<CatalogInfo> {
             tables.insert(table_name, size);
         }
 
-        Ok(CatalogInfo { tables })
+        let workload = if include_workload {
+            let version_row = client
+                .query_one("SHOW server_version_num", &[])
+                .await
+                .ok();
+            let pg_version_num: i32 = version_row
+                .and_then(|r| r.get::<_, String>(0).parse().ok())
+                .unwrap_or(160000);
+
+            match super::workload::fetch_workload(&client, pg_version_num).await {
+                Ok(w) => Some(w),
+                Err(e) => {
+                    eprintln!("workload collection skipped: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        Ok(CatalogInfo { tables, workload })
     })
 }

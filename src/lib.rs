@@ -1,7 +1,10 @@
 pub mod analysis;
 pub mod catalog;
+pub mod forecast;
+pub mod locks;
 pub mod output;
 pub mod parse;
 pub mod recipe;
 pub mod rules;
 pub mod types;
+pub mod workload;

@@ -7,6 +7,7 @@ pub mod rename;
 use crate::catalog::CatalogInfo;
 use crate::parse;
 use crate::types::Finding;
+use crate::workload::TransactionBaseline;
 use anyhow::Result;
 use pg_query::protobuf::node;
 
@@ -34,6 +35,7 @@ impl Default for PgVersion {
 pub struct RuleContext<'a> {
     pub pg_version: PgVersion,
     pub catalog: Option<&'a CatalogInfo>,
+    pub transaction_baseline: Option<&'a TransactionBaseline>,
 }
 
 pub fn analyse(source: &str, ctx: &RuleContext) -> Result<Vec<Finding>> {

@@ -1,6 +1,5 @@
 ---
 source: tests/integration.rs
-assertion_line: 237
 expression: result
 ---
 {
@@ -9,7 +8,19 @@ expression: result
     {
       "rule_id": "add-column",
       "risk_level": "low",
-      "confidence": "definite",
+      "confidence": {
+        "from_docs": [
+          "ACCESS EXCLUSIVE lock for ADD COLUMN (metadata only, milliseconds)"
+        ],
+        "from_catalog": [],
+        "from_stats": [],
+        "unknowns": [
+          "table size unknown",
+          "query load unknown",
+          "cache state unknown"
+        ],
+        "grade": "static"
+      },
       "lock_mode": "ACCESS_EXCLUSIVE",
       "rewrite": {
         "type": "none"
@@ -20,13 +31,25 @@ expression: result
       "recipe": null,
       "pg_version_note": null,
       "statement_sql": "ALTER TABLE users ADD COLUMN email TEXT",
-      "estimated_duration": null,
-      "assumptions": []
+      "duration_forecast": null
     },
     {
       "rule_id": "set-not-null",
       "risk_level": "high",
-      "confidence": "needs_catalog",
+      "confidence": {
+        "from_docs": [
+          "ACCESS EXCLUSIVE lock with full table scan for SET NOT NULL",
+          "PostgreSQL 16 assumed"
+        ],
+        "from_catalog": [],
+        "from_stats": [],
+        "unknowns": [
+          "table size unknown",
+          "query load unknown",
+          "cache state unknown"
+        ],
+        "grade": "static"
+      },
       "lock_mode": "ACCESS_EXCLUSIVE",
       "rewrite": {
         "type": "none"
@@ -65,15 +88,24 @@ expression: result
       },
       "pg_version_note": "PG 12+ can skip the scan with a pre-validated CHECK constraint.",
       "statement_sql": "ALTER TABLE users ALTER COLUMN email SET NOT NULL",
-      "estimated_duration": null,
-      "assumptions": [
-        "PostgreSQL 16 assumed"
-      ]
+      "duration_forecast": null
     },
     {
       "rule_id": "create-index",
       "risk_level": "high",
-      "confidence": "needs_catalog",
+      "confidence": {
+        "from_docs": [
+          "SHARE lock blocks writes for entire index build duration"
+        ],
+        "from_catalog": [],
+        "from_stats": [],
+        "unknowns": [
+          "table size unknown",
+          "query load unknown",
+          "cache state unknown"
+        ],
+        "grade": "static"
+      },
       "lock_mode": "SHARE",
       "rewrite": {
         "type": "none"
@@ -94,8 +126,7 @@ expression: result
       },
       "pg_version_note": null,
       "statement_sql": "CREATE INDEX idx_users_email ON users (email)",
-      "estimated_duration": null,
-      "assumptions": []
+      "duration_forecast": null
     }
   ],
   "blast_radius": {
@@ -107,14 +138,24 @@ expression: result
         "blocks_writes": true,
         "statement_count": 3,
         "table_size": null,
-        "estimated_total_duration": null,
+        "duration_forecast": null,
+        "blocked_queries": [],
+        "total_blocked_qps": 0.0,
+        "confidence": {
+          "from_docs": [],
+          "from_catalog": [],
+          "from_stats": [],
+          "unknowns": [
+            "table size unknown",
+            "query load unknown",
+            "cache state unknown"
+          ],
+          "grade": "static"
+        },
         "recommendation": "3 statements touch \"users\". Consider splitting into separate migrations."
       }
     ]
   },
   "overall_risk": "high",
-  "overall_confidence": "needs_catalog",
-  "assumptions": [
-    "PostgreSQL 16 assumed"
-  ]
+  "overall_confidence": "static"
 }

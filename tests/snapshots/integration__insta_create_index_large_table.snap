@@ -1,6 +1,5 @@
 ---
 source: tests/integration.rs
-assertion_line: 245
 expression: result
 ---
 {
@@ -9,7 +8,20 @@ expression: result
     {
       "rule_id": "create-index",
       "risk_level": "extreme",
-      "confidence": "definite",
+      "confidence": {
+        "from_docs": [
+          "SHARE lock blocks writes for entire index build duration"
+        ],
+        "from_catalog": [
+          "table size is 46.6 GB"
+        ],
+        "from_stats": [],
+        "unknowns": [
+          "query load unknown",
+          "cache state unknown"
+        ],
+        "grade": "estimated"
+      },
       "lock_mode": "SHARE",
       "rewrite": {
         "type": "none"
@@ -30,14 +42,28 @@ expression: result
       },
       "pg_version_note": null,
       "statement_sql": "CREATE INDEX idx_orders_customer ON orders (customer_id)",
-      "estimated_duration": {
-        "low_seconds": 597,
-        "high_seconds": 1590,
-        "caveats": [
-          "Throughput estimated; actual duration depends on storage, IO load, and concurrent activity"
+      "duration_forecast": {
+        "p50_seconds": 596.0464477539063,
+        "p90_seconds": 1589.4571940104167,
+        "worst_seconds": 4768.37158203125,
+        "assumptions": [
+          {
+            "factor": "table size",
+            "assumed": "46.6 GB",
+            "source": "catalog"
+          },
+          {
+            "factor": "cache state",
+            "assumed": "warm shared_buffers at p50, cold at p90",
+            "source": "assumed"
+          },
+          {
+            "factor": "lock acquisition delay",
+            "assumed": "no workload data, worst = 3x p90 heuristic",
+            "source": "assumed"
+          }
         ]
-      },
-      "assumptions": []
+      }
     }
   ],
   "blast_radius": {
@@ -49,18 +75,46 @@ expression: result
         "blocks_writes": true,
         "statement_count": 1,
         "table_size": null,
-        "estimated_total_duration": {
-          "low_seconds": 597,
-          "high_seconds": 1590,
-          "caveats": [
-            "Throughput estimated; actual duration depends on storage, IO load, and concurrent activity"
+        "duration_forecast": {
+          "p50_seconds": 596.0464477539063,
+          "p90_seconds": 1589.4571940104167,
+          "worst_seconds": 4768.37158203125,
+          "assumptions": [
+            {
+              "factor": "table size",
+              "assumed": "46.6 GB",
+              "source": "catalog"
+            },
+            {
+              "factor": "cache state",
+              "assumed": "warm shared_buffers at p50, cold at p90",
+              "source": "assumed"
+            },
+            {
+              "factor": "lock acquisition delay",
+              "assumed": "no workload data, worst = 3x p90 heuristic",
+              "source": "assumed"
+            }
           ]
+        },
+        "blocked_queries": [],
+        "total_blocked_qps": 0.0,
+        "confidence": {
+          "from_docs": [
+            "lock mode is SHARE for this operation"
+          ],
+          "from_catalog": [],
+          "from_stats": [],
+          "unknowns": [
+            "query load unknown",
+            "cache state unknown"
+          ],
+          "grade": "estimated"
         },
         "recommendation": null
       }
     ]
   },
   "overall_risk": "extreme",
-  "overall_confidence": "definite",
-  "assumptions": []
+  "overall_confidence": "estimated"
 }

@@ -26,7 +26,9 @@ fn analyse_drop_index(drop_stmt: &protobuf::DropStmt, stmt_sql: &str) -> Vec<Fin
         vec![Finding {
             rule_id: "drop-index-concurrently".into(),
             risk_level: RiskLevel::Low,
-            confidence: Confidence::Definite,
+            confidence: ConfidenceLedger::static_only(
+                vec!["SHARE UPDATE EXCLUSIVE lock (non-blocking) for DROP INDEX CONCURRENTLY".into()],
+            ),
             lock_mode: LockMode::ShareUpdateExclusive,
             rewrite: RewriteRisk::None,
             affected_table: None,
@@ -37,14 +39,15 @@ fn analyse_drop_index(drop_stmt: &protobuf::DropStmt, stmt_sql: &str) -> Vec<Fin
             recipe: None,
             pg_version_note: None,
             statement_sql: stmt_sql.into(),
-            estimated_duration: None,
-            assumptions: vec![],
+            duration_forecast: None,
         }]
     } else {
         vec![Finding {
             rule_id: "drop-index".into(),
             risk_level: RiskLevel::High,
-            confidence: Confidence::Definite,
+            confidence: ConfidenceLedger::static_only(
+                vec!["ACCESS EXCLUSIVE lock for DROP INDEX (blocks all queries)".into()],
+            ),
             lock_mode: LockMode::AccessExclusive,
             rewrite: RewriteRisk::None,
             affected_table: None,
@@ -55,8 +58,7 @@ fn analyse_drop_index(drop_stmt: &protobuf::DropStmt, stmt_sql: &str) -> Vec<Fin
             recipe: Some(recipe::drop_index_concurrently(&idx_name)),
             pg_version_note: None,
             statement_sql: stmt_sql.into(),
-            estimated_duration: None,
-            assumptions: vec![],
+            duration_forecast: None,
         }]
     }
 }
@@ -65,7 +67,9 @@ fn analyse_drop_table(stmt_sql: &str) -> Vec<Finding> {
     vec![Finding {
         rule_id: "drop-table".into(),
         risk_level: RiskLevel::High,
-        confidence: Confidence::Definite,
+        confidence: ConfidenceLedger::static_only(
+            vec!["ACCESS EXCLUSIVE lock for DROP TABLE (destructive)".into()],
+        ),
         lock_mode: LockMode::AccessExclusive,
         rewrite: RewriteRisk::None,
         affected_table: None,
@@ -76,8 +80,7 @@ fn analyse_drop_table(stmt_sql: &str) -> Vec<Finding> {
         recipe: None,
         pg_version_note: None,
         statement_sql: stmt_sql.into(),
-        estimated_duration: None,
-        assumptions: vec![],
+        duration_forecast: None,
     }]
 }
 

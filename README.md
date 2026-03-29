@@ -5,118 +5,110 @@
 <h1 align="center">pg-blast-radius</h1>
 
 <p align="center">
-  Know what your PostgreSQL migration will do to your actual database.
+  Forecast what your PostgreSQL migration will block, for how long, on your actual workload.
 </p>
 
 <p align="center">
-  <a href="#quick-start">Quick start</a> &middot;
   <a href="#what-it-does">What it does</a> &middot;
-  <a href="#how-it-differs-from-squawk">vs squawk</a> &middot;
+  <a href="#quick-start">Quick start</a> &middot;
+  <a href="#how-it-compares">How it compares</a> &middot;
   <a href="#ci-integration">CI</a>
 </p>
 
 ---
 
-pg-blast-radius connects to your Postgres instance and reports:
+https://github.com/user-attachments/assets/ee5c219c-5be6-4a9f-afe6-a2a8debff332
 
-- **Blast radius** per table, showing which locks are held, for how long, blocking what
-- **Duration estimates** based on real table sizes from your database
+pg-blast-radius reads your migration SQL, connects read-only to your database, and reports:
+
+- **Blocked query families** from `pg_stat_statements`, showing which production queries queue up and how many
+- **Duration forecasts** as P50 / P90 / worst-case ranges, not single-point estimates
 - **Rollout recipes** with step-by-step safer SQL when a migration should be split
-- **Confidence levels** stating what it knows, what it cannot know, and what you should check
+- **Confidence ledger** stating what is known from docs, observed from catalog, inferred from workload, and assumed
 
-It is not a linter. Use [squawk](https://squawkhq.com) for that.
-It is not a migration runner. It is a risk estimator.
+Other tools tell you "this takes ACCESS EXCLUSIVE." This one tells you "this will queue 14,200 queries/min on your busiest table for an estimated 6..12 minutes."
+
+## What it does
+
+```
+$ pg-blast-radius analyse migration.sql --stats-file prod-stats.json
+
+  orders (34.0 GB, ~892M rows)
+    Lock: ACCESS EXCLUSIVE (blocks all reads and writes)
+    Duration: 16m (p50)  37m (p90)  37m (worst)
+    Blocked queries: 3 families, 14202 calls/min combined
+      SELECT ... FROM orders WHERE customer_id = $1   8100/min  ~129255 queued (p50)
+      INSERT INTO orders (...)                        4800/min  ~76596 queued (p50)
+      UPDATE orders SET status = $1 WHERE id = $2     1302/min  ~20777 queued (p50)
+    Confidence: query load MEASURED, lock hold INFERRED
+    3 statements combined
+
+  EXTREME  ALTER COLUMN TYPE on "orders"."total" to numeric triggers table rewrite
+    Estimated: 6m (p50)  12m (p90)  12m (worst)
+    Rollout recipe: Expand/migrate/contract for "orders"."total"
+      1. [expand]    ADD COLUMN "total_new" numeric
+      2. [backfill]  UPDATE in batches
+      3. [validate]  CREATE TRIGGER to sync during migration
+      4. [switch]    Application reads from new column
+      5. [contract]  DROP old column, trigger, rename
+
+  EXTREME  CREATE INDEX "idx_orders_status" without CONCURRENTLY
+    Estimated: 7m (p50)  19m (p90)  19m (worst)
+    Rollout recipe: CREATE INDEX CONCURRENTLY
+
+  EXTREME  ADD FOREIGN KEY scans 34 GB table
+    Estimated: 3m (p50)  6m (p90)  6m (worst)
+    Rollout recipe: ADD ... NOT VALID + VALIDATE CONSTRAINT
+
+  Overall: EXTREME RISK | Confidence: ESTIMATED
+  3 statements, 3 safer alternatives suggested.
+```
+
+Without a database connection, it still analyses lock modes, rewrite risk, and generates recipes. With one, it tells you exactly what will hurt.
 
 ## Quick start
 
 ```sh
 cargo install pg-blast-radius
 
-# Static analysis (useful, but limited)
 pg-blast-radius analyse migration.sql
 
-# Catalog-informed analysis (the real value)
-pg-blast-radius analyse migration.sql --dsn postgres://readonly@staging:5432/mydb
+pg-blast-radius analyse migration.sql --dsn postgres://readonly@prod-replica:5432/mydb
 ```
 
-## Example output
+The `--dsn` connection is read-only. It queries `pg_stat_user_tables` for sizes, `pg_stat_statements` for query workload, and `pg_stat_activity` for transaction baseline. No writes, no superuser.
 
-Same SQL, two databases, two verdicts:
+### Offline stats
 
-**16 kB table (50 rows)**
+Export once, use in CI without database access:
 
-```
- MEDIUM  CREATE INDEX "idx_sessions_user" on "sessions" without CONCURRENTLY
-   Takes SHARE lock. Table is 16.0 kB. Estimated: 1s..1s
-   CONCURRENTLY not required for tables this small.
-```
+```sh
+pg-blast-radius collect-stats --dsn postgres://readonly@prod-replica/mydb > prod-stats.json
 
-**47 GB table (800M rows)**
-
-```
- EXTREME  CREATE INDEX "idx_orders_customer" on "orders" without CONCURRENTLY
-   Takes SHARE lock. Table is 47.0 GB. Blocks writes for estimated 10m..27m.
-
-   Rollout recipe: Non-blocking index build on "orders"
-     1. [expand] Create index concurrently
-        CREATE INDEX CONCURRENTLY "idx_orders_customer" ON "orders" (customer_id);
+pg-blast-radius analyse migration.sql --stats-file prod-stats.json
 ```
 
-squawk flags both identically. pg-blast-radius tells you one is harmless and the other will take your site down.
+## Analysis modes
 
-## Multi-statement blast radius
+| Capability | Static (no DB) | With catalog | With workload |
+|---|---|---|---|
+| Lock mode prediction | Yes | Yes | Yes |
+| Table rewrite detection | Yes | Yes | Yes |
+| Risk level | Conservative | Size-aware | Size-aware |
+| Duration forecast | No | P50/P90/worst | P50/P90/worst + lock delay |
+| Blocked query families | No | No | Yes |
+| Queue depth estimates | No | No | Yes |
+| Rollout recipes | Yes | Yes | Yes |
+| Confidence | STATIC | ESTIMATED | MEASURED |
 
-```
-$ pg-blast-radius analyse migration.sql --dsn postgres://staging/mydb
-
-  Blast Radius
-    users (2.3 GB, ~15M rows) -> ACCESS EXCLUSIVE (3 statements combined)
-      Blocks: all reads and writes
-      Estimated duration: 42s..2m
-      3 statements touch "users". Consider splitting into separate migrations.
-
-   LOW  ADD COLUMN "email" on "users" (no default)
-     Metadata-only change. Lock held for milliseconds.
-
-   HIGH  SET NOT NULL on "users"."email" requires full table scan
-     ACCESS EXCLUSIVE lock held during scan. Estimated: 12s..24s
-
-     Rollout recipe: Safe SET NOT NULL for "users"."email"
-       1. [expand]    ADD CONSTRAINT ... CHECK ("email" IS NOT NULL) NOT VALID;
-       2. [validate]  VALIDATE CONSTRAINT ...;   -- non-blocking
-       3. [switch]    ALTER COLUMN "email" SET NOT NULL;  -- instant (PG 12+)
-       4. [contract]  DROP CONSTRAINT ...;
-
-   HIGH  CREATE INDEX "idx_users_email" on "users" without CONCURRENTLY
-     SHARE lock. Blocks writes. Estimated: 30s..1m
-
-     Rollout recipe: Non-blocking index
-       1. CREATE INDEX CONCURRENTLY idx_users_email ON users (email);
-
-  Overall: HIGH RISK | Confidence: definite
-  3 statements, 2 safer alternatives suggested.
-```
-
-## What it does
-
-| Feature | Static mode | With `--dsn` / `--stats-file` |
-|---------|-------------|-------------------------------|
-| Lock mode prediction | Yes | Yes |
-| Table rewrite detection | Yes | Yes |
-| Risk level (low/medium/high/extreme) | Yes (conservative) | Yes (table-size-aware) |
-| Duration estimates | No | Yes (ranges with caveats) |
-| Rollout recipes | Yes | Yes |
-| Per-table blast radius aggregation | Yes | Yes |
-| Confidence scoring | "needs-catalog" | "definite" |
-
-### Rules
+## Rules
 
 | Operation | What it detects |
-|-----------|----------------|
+|---|---|
 | `ADD COLUMN` | Default volatility, NOT NULL, PG version-dependent rewrite |
-| `ALTER COLUMN TYPE` | Binary format change -> rewrite detection |
+| `ALTER COLUMN TYPE` | Binary format change, rewrite detection |
 | `SET NOT NULL` | Full scan risk, PG 12+ safe path |
-| `ADD CONSTRAINT CHECK/FK/UNIQUE` | NOT VALID detection, lock analysis |
+| `ADD CONSTRAINT CHECK/FK/UNIQUE/PK` | NOT VALID detection, lock analysis |
 | `VALIDATE CONSTRAINT` | Non-blocking lock confirmation |
 | `CREATE INDEX` | CONCURRENTLY detection, SHARE lock warning |
 | `DROP INDEX` | CONCURRENTLY detection |
@@ -124,58 +116,62 @@ $ pg-blast-radius analyse migration.sql --dsn postgres://staging/mydb
 | `RENAME COLUMN/TABLE` | Lock warning, application breakage risk |
 | `ATTACH PARTITION` | Scan risk, pre-validated CHECK optimisation |
 
-## How it differs from squawk
+## How it compares
 
-squawk is a migration linter. It pattern-matches SQL and tells you which anti-patterns you used. It treats every table the same.
+pg-blast-radius occupies a specific niche: **workload-aware risk forecasting with explicit confidence accounting**. Other tools cover adjacent parts of the problem.
 
-pg-blast-radius is a risk estimator. It optionally connects to your database and says "this ALTER TYPE on a 47 GB table will block all queries for an estimated 8..16 minutes." Then it generates the multi-step rollout SQL.
+| | pg-blast-radius | squawk | Atlas lint | Eugene | pgfence |
+|---|---|---|---|---|---|
+| Static lint rules | ~15 | 31 | 20+ | 12+ | 15+ |
+| Lock mode prediction | Yes | No | Yes | Yes | Yes |
+| Safe rewrite suggestions | Yes (recipes) | Partial | Yes | No | Yes |
+| Live DB context | Workload + catalog | No | Schema | Trace mode | Stats snapshot |
+| Blocked query forecast | Yes | No | No | No | No |
+| Duration P50/P90/worst | Yes | No | No | No | No |
+| Confidence ledger | Yes | No | No | No | No |
+| Queue depth estimates | Yes | No | No | No | No |
 
-| | squawk | pg-blast-radius |
-|---|--------|----------------|
-| Static lint rules | 31 | ~15 |
-| Catalog-aware risk | No | Yes |
-| Environment-sensitive verdicts | No | Yes |
-| Duration estimates | No | Yes |
-| Rollout recipe generation | No | Yes |
-| Per-table blast radius | No | Yes |
-| Confidence scoring | No | Yes |
+**Strengths**: Tells you what queries queue up and for how long, on your actual workload. Explicit about what it knows vs assumes.
 
-Use both: squawk in pre-commit for fast linting, pg-blast-radius in CI for operational risk assessment.
+**Weaknesses**: Fewer lint rules than squawk. No trace/replay mode (yet). Requires `pg_stat_statements` for full analysis.
+
+Use squawk in pre-commit for fast linting. Use pg-blast-radius in CI for operational risk assessment.
 
 ## CLI
 
 ```
-pg-blast-radius analyse <files...>           # analyse migration files
-pg-blast-radius collect-stats --dsn <dsn>    # export catalog stats for offline CI
+pg-blast-radius analyse <files...>
+pg-blast-radius collect-stats --dsn <dsn>
 ```
 
-### Flags
-
 | Flag | Default | Purpose |
-|------|---------|---------|
+|---|---|---|
 | `--pg-version` | 16 | PostgreSQL version to assume |
 | `--format` | terminal | `terminal` or `json` |
 | `--fail-level` | high | Exit non-zero if any finding meets this level |
-| `--dsn` | none | Database connection for table sizes |
+| `--dsn` | none | Database connection (read-only) for catalog + workload |
 | `--stats-file` | none | Pre-collected stats JSON (alternative to --dsn) |
+| `--no-workload` | false | Skip pg_stat_statements/pg_stat_activity queries |
 
 ### Exit codes
 
 | Code | Meaning |
-|------|---------|
+|---|---|
 | 0 | All findings below `--fail-level` |
 | 1 | At least one finding meets `--fail-level` |
 | 2 | Parse error or invalid input |
 
 ## CI integration
 
-### Offline stats workflow
+### GitHub Actions
 
-If your CI cannot connect to a database directly, export stats once and check them in:
-
-```sh
-pg-blast-radius collect-stats --dsn postgres://staging/mydb > .pg-stats.json
-pg-blast-radius analyse migrations/*.sql --stats-file .pg-stats.json --format json
+```yaml
+- name: Check migration risk
+  run: |
+    pg-blast-radius analyse migrations/*.sql \
+      --stats-file .pg-stats.json \
+      --format json \
+      --fail-level high
 ```
 
 ### JSON output
@@ -184,7 +180,7 @@ pg-blast-radius analyse migrations/*.sql --stats-file .pg-stats.json --format js
 pg-blast-radius analyse migration.sql --format json --stats-file stats.json
 ```
 
-Returns a JSON array of analysis results, each with `findings`, `blast_radius`, `overall_risk`, and `overall_confidence`.
+Returns a JSON array with `findings`, `blast_radius` (including `blocked_queries`), `overall_risk`, and `overall_confidence`.
 
 ## Building from source
 
@@ -195,6 +191,12 @@ cargo build --release
 ```
 
 Requires Rust 1.85+ and a C compiler (for libpg_query).
+
+## Status
+
+52 tests passing. Production-ready for static and catalog-aware analysis. Workload-aware forecasting is new in v0.2 and should be validated against your environment.
+
+Not yet implemented: REINDEX, VACUUM/ANALYSE, materialized views, TRUNCATE, trace/replay mode, custom rules.
 
 ## Licence
 

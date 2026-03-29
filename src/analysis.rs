@@ -1,8 +1,14 @@
 use std::collections::HashMap;
 
+use crate::forecast;
 use crate::types::*;
+use crate::workload::WorkloadProfile;
 
-pub fn build_result(file: &str, findings: Vec<Finding>) -> AnalysisResult {
+pub fn build_result(
+    file: &str,
+    findings: Vec<Finding>,
+    workload: Option<&WorkloadProfile>,
+) -> AnalysisResult {
     let mut per_table: HashMap<String, TableBlastRadius> = HashMap::new();
 
     for f in &findings {
@@ -18,7 +24,10 @@ pub fn build_result(file: &str, findings: Vec<Finding>) -> AnalysisResult {
                 blocks_writes: false,
                 statement_count: 0,
                 table_size: None,
-                estimated_total_duration: None,
+                duration_forecast: None,
+                blocked_queries: vec![],
+                total_blocked_qps: 0.0,
+                confidence: ConfidenceLedger::static_only(vec![]),
                 recommendation: None,
             });
 
@@ -29,19 +38,16 @@ pub fn build_result(file: &str, findings: Vec<Finding>) -> AnalysisResult {
         entry.blocks_writes = entry.strongest_lock.blocks_writes();
         entry.statement_count += 1;
 
-        if let Some(ref est) = f.estimated_duration {
-            entry.estimated_total_duration = Some(match entry.estimated_total_duration.take() {
-                Some(existing) => DurationEstimate {
-                    low_seconds: existing.low_seconds + est.low_seconds,
-                    high_seconds: existing.high_seconds + est.high_seconds,
-                    caveats: existing.caveats,
+        if let Some(ref est) = f.duration_forecast {
+            entry.duration_forecast = Some(match entry.duration_forecast.take() {
+                Some(existing) => DurationForecast {
+                    p50_seconds: existing.p50_seconds + est.p50_seconds,
+                    p90_seconds: existing.p90_seconds + est.p90_seconds,
+                    worst_seconds: existing.worst_seconds + est.worst_seconds,
+                    assumptions: existing.assumptions,
                 },
                 None => est.clone(),
             });
-        }
-
-        if let Some(ref size) = find_table_size(&findings, table) {
-            entry.table_size = Some(size.clone());
         }
     }
 
@@ -51,6 +57,63 @@ pub fn build_result(file: &str, findings: Vec<Finding>) -> AnalysisResult {
                 "{} statements touch \"{}\". Consider splitting into separate migrations.",
                 entry.statement_count, entry.table_name
             ));
+        }
+
+        if let Some(workload_profile) = workload {
+            let families = workload_profile.families_for_table(&entry.table_name);
+            if !families.is_empty() {
+                if let Some(ref dur) = entry.duration_forecast {
+                    entry.blocked_queries = forecast::forecast_blocked_queries(
+                        entry.strongest_lock,
+                        dur,
+                        &families,
+                    );
+                    entry.total_blocked_qps = entry
+                        .blocked_queries
+                        .iter()
+                        .map(|bq| bq.calls_per_sec)
+                        .sum();
+                }
+
+                let table_qps = workload_profile.table_qps(&entry.table_name);
+                let family_count = families.len();
+
+                let mut doc_facts: Vec<String> = vec![
+                    format!("lock mode is {} for this operation", entry.strongest_lock),
+                ];
+                let catalog_facts: Vec<String> = entry
+                    .table_size
+                    .as_ref()
+                    .map(|s| vec![format!("table size is {} (~{} rows)", s.human_size, s.row_estimate)])
+                    .unwrap_or_default();
+                let stats_facts = vec![
+                    format!("{family_count} query families, {:.0} calls/min combined", table_qps * 60.0),
+                ];
+
+                if entry.duration_forecast.is_some() {
+                    doc_facts.push("lock hold duration inferred from table size and throughput model".into());
+                }
+
+                entry.confidence = ConfidenceLedger::with_workload(doc_facts, catalog_facts, stats_facts);
+            } else if entry.duration_forecast.is_some() {
+                entry.confidence = ConfidenceLedger::with_catalog(
+                    vec![format!("lock mode is {} for this operation", entry.strongest_lock)],
+                    entry
+                        .table_size
+                        .as_ref()
+                        .map(|s| vec![format!("table size is {}", s.human_size)])
+                        .unwrap_or_default(),
+                );
+            }
+        } else if entry.duration_forecast.is_some() {
+            entry.confidence = ConfidenceLedger::with_catalog(
+                vec![format!("lock mode is {} for this operation", entry.strongest_lock)],
+                entry
+                    .table_size
+                    .as_ref()
+                    .map(|s| vec![format!("table size is {}", s.human_size)])
+                    .unwrap_or_default(),
+            );
         }
     }
 
@@ -65,16 +128,9 @@ pub fn build_result(file: &str, findings: Vec<Finding>) -> AnalysisResult {
 
     let overall_confidence = findings
         .iter()
-        .map(|f| f.confidence)
+        .map(|f| f.confidence.grade)
         .min()
-        .unwrap_or(Confidence::Definite);
-
-    let mut assumptions: Vec<String> = findings
-        .iter()
-        .flat_map(|f| f.assumptions.iter().cloned())
-        .collect();
-    assumptions.sort();
-    assumptions.dedup();
+        .unwrap_or(ConfidenceGrade::Measured);
 
     AnalysisResult {
         file: file.into(),
@@ -82,17 +138,5 @@ pub fn build_result(file: &str, findings: Vec<Finding>) -> AnalysisResult {
         blast_radius: BlastRadius { per_table: tables },
         overall_risk,
         overall_confidence,
-        assumptions,
     }
-}
-
-fn find_table_size(findings: &[Finding], table: &str) -> Option<TableSize> {
-    for f in findings {
-        if f.affected_table.as_deref() == Some(table) {
-            if let Some(ref dur) = f.estimated_duration {
-                let _ = dur;
-            }
-        }
-    }
-    None
 }

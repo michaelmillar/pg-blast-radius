@@ -46,6 +46,9 @@ enum Commands {
     CollectStats {
         #[arg(long)]
         dsn: String,
+
+        #[arg(long)]
+        no_workload: bool,
     },
 }
 
@@ -78,10 +81,18 @@ fn main() -> Result<()> {
                 stats_file.as_deref(),
             )?;
 
+            let transaction_baseline = catalog
+                .as_ref()
+                .and_then(|c| c.workload.as_ref())
+                .map(|w| &w.transaction_baseline);
+
             let ctx = RuleContext {
                 pg_version: PgVersion { major: pg_version },
                 catalog: catalog.as_ref(),
+                transaction_baseline,
             };
+
+            let workload = catalog.as_ref().and_then(|c| c.workload.as_ref());
 
             let mut results = Vec::new();
             let mut exit_code = 0;
@@ -91,7 +102,7 @@ fn main() -> Result<()> {
                     .map_err(|e| anyhow::anyhow!("Failed to read {}: {e}", file.display()))?;
 
                 let findings = pg_blast_radius::rules::analyse(&source, &ctx)?;
-                let result = analysis::build_result(&file.display().to_string(), findings);
+                let result = analysis::build_result(&file.display().to_string(), findings, workload);
 
                 if result.overall_risk >= fail_level {
                     exit_code = 1;
@@ -109,9 +120,9 @@ fn main() -> Result<()> {
         }
 
         #[cfg(feature = "catalog")]
-        Commands::CollectStats { dsn } => {
-            let catalog = pg_blast_radius::catalog::live::fetch_catalog(&dsn)?;
-            let entries: Vec<_> = catalog
+        Commands::CollectStats { dsn, no_workload } => {
+            let catalog = pg_blast_radius::catalog::live::fetch_catalog(&dsn, !no_workload)?;
+            let tables: Vec<_> = catalog
                 .tables
                 .into_iter()
                 .map(|(name, size)| {
@@ -122,7 +133,11 @@ fn main() -> Result<()> {
                     })
                 })
                 .collect();
-            println!("{}", serde_json::to_string_pretty(&entries)?);
+            let output = serde_json::json!({
+                "tables": tables,
+                "workload": catalog.workload
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
             Ok(())
         }
     }
@@ -140,7 +155,7 @@ fn load_catalog(
 
     #[cfg(feature = "catalog")]
     if let Some(dsn) = dsn {
-        return Ok(Some(pg_blast_radius::catalog::live::fetch_catalog(dsn)?));
+        return Ok(Some(pg_blast_radius::catalog::live::fetch_catalog(dsn, true)?));
     }
 
     Ok(None)

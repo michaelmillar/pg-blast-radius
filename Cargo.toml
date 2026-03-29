@@ -1,8 +1,8 @@
 [package]
 name = "pg-blast-radius"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "PostgreSQL migration risk analyser with catalog-aware blast radius estimation"
+description = "Workload-aware blast radius forecaster for PostgreSQL migrations"
 license = "MIT"
 
 [dependencies]

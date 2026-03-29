@@ -23,7 +23,9 @@ pub fn analyse_rename(
             vec![Finding {
                 rule_id: "rename-column".into(),
                 risk_level: RiskLevel::Medium,
-                confidence: Confidence::Definite,
+                confidence: ConfidenceLedger::static_only(
+                    vec!["ACCESS EXCLUSIVE lock for RENAME COLUMN (brief, catalog only)".into()],
+                ),
                 lock_mode: LockMode::AccessExclusive,
                 rewrite: RewriteRisk::None,
                 affected_table: Some(table.clone()),
@@ -38,15 +40,16 @@ pub fn analyse_rename(
                 recipe: None,
                 pg_version_note: None,
                 statement_sql: stmt_sql.into(),
-                estimated_duration: None,
-                assumptions: vec![],
+                duration_forecast: None,
             }]
         }
         ObjectType::ObjectTable => {
             vec![Finding {
                 rule_id: "rename-table".into(),
                 risk_level: RiskLevel::Medium,
-                confidence: Confidence::Definite,
+                confidence: ConfidenceLedger::static_only(
+                    vec!["ACCESS EXCLUSIVE lock for RENAME TABLE (brief, catalog only)".into()],
+                ),
                 lock_mode: LockMode::AccessExclusive,
                 rewrite: RewriteRisk::None,
                 affected_table: Some(table.clone()),
@@ -61,8 +64,7 @@ pub fn analyse_rename(
                 recipe: None,
                 pg_version_note: None,
                 statement_sql: stmt_sql.into(),
-                estimated_duration: None,
-                assumptions: vec![],
+                duration_forecast: None,
             }]
         }
         _ => vec![],

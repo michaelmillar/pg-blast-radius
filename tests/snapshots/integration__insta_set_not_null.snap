@@ -1,6 +1,5 @@
 ---
 source: tests/integration.rs
-assertion_line: 251
 expression: result
 ---
 {
@@ -9,7 +8,20 @@ expression: result
     {
       "rule_id": "set-not-null",
       "risk_level": "high",
-      "confidence": "needs_catalog",
+      "confidence": {
+        "from_docs": [
+          "ACCESS EXCLUSIVE lock with full table scan for SET NOT NULL",
+          "PostgreSQL 16 assumed"
+        ],
+        "from_catalog": [],
+        "from_stats": [],
+        "unknowns": [
+          "table size unknown",
+          "query load unknown",
+          "cache state unknown"
+        ],
+        "grade": "static"
+      },
       "lock_mode": "ACCESS_EXCLUSIVE",
       "rewrite": {
         "type": "none"
@@ -48,10 +60,7 @@ expression: result
       },
       "pg_version_note": "PG 12+ can skip the scan with a pre-validated CHECK constraint.",
       "statement_sql": "ALTER TABLE users ALTER COLUMN email SET NOT NULL",
-      "estimated_duration": null,
-      "assumptions": [
-        "PostgreSQL 16 assumed"
-      ]
+      "duration_forecast": null
     }
   ],
   "blast_radius": {
@@ -63,14 +72,24 @@ expression: result
         "blocks_writes": true,
         "statement_count": 1,
         "table_size": null,
-        "estimated_total_duration": null,
+        "duration_forecast": null,
+        "blocked_queries": [],
+        "total_blocked_qps": 0.0,
+        "confidence": {
+          "from_docs": [],
+          "from_catalog": [],
+          "from_stats": [],
+          "unknowns": [
+            "table size unknown",
+            "query load unknown",
+            "cache state unknown"
+          ],
+          "grade": "static"
+        },
         "recommendation": null
       }
     ]
   },
   "overall_risk": "high",
-  "overall_confidence": "needs_catalog",
-  "assumptions": [
-    "PostgreSQL 16 assumed"
-  ]
+  "overall_confidence": "static"
 }
