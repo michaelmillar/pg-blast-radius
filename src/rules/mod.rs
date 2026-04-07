@@ -2,6 +2,7 @@ pub mod alter_table;
 pub mod constraints;
 pub mod create_index;
 pub mod drop;
+pub mod maintenance;
 pub mod rename;
 
 use crate::catalog::CatalogInfo;
@@ -59,6 +60,27 @@ pub fn analyse(source: &str, ctx: &RuleContext) -> Result<Vec<Finding>> {
             }
             node::Node::RenameStmt(rename) => {
                 findings.extend(rename::analyse_rename(rename, &stmt_sql, ctx));
+            }
+            node::Node::TruncateStmt(truncate) => {
+                findings.extend(maintenance::analyse_truncate(truncate, &stmt_sql, ctx));
+            }
+            node::Node::VacuumStmt(vacuum) => {
+                findings.extend(maintenance::analyse_vacuum(vacuum, &stmt_sql, ctx));
+            }
+            node::Node::ReindexStmt(reindex) => {
+                findings.extend(maintenance::analyse_reindex(reindex, &stmt_sql, ctx));
+            }
+            node::Node::RefreshMatViewStmt(refresh) => {
+                findings.extend(maintenance::analyse_refresh_matview(refresh, &stmt_sql, ctx));
+            }
+            node::Node::SelectStmt(_)
+            | node::Node::InsertStmt(_)
+            | node::Node::UpdateStmt(_)
+            | node::Node::DeleteStmt(_) => {
+                eprintln!(
+                    "warning: DML statement ignored (pg-blast-radius analyses DDL only): {}",
+                    stmt_sql.lines().next().unwrap_or("").trim()
+                );
             }
             _ => {}
         }

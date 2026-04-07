@@ -1,9 +1,13 @@
 [package]
 name = "pg-blast-radius"
 version = "0.2.0"
-edition = "2024"
+edition = "2021"
 description = "Workload-aware blast radius forecaster for PostgreSQL migrations"
 license = "MIT"
+repository = "https://github.com/michaelmillar/pg-blast-radius"
+readme = "README.md"
+keywords = ["postgres", "migration", "database", "devops", "ci"]
+categories = ["command-line-utilities", "database"]
 
 [dependencies]
 pg_query = "6"

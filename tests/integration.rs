@@ -37,6 +37,7 @@ fn mock_workload(families: Vec<QueryFamily>) -> WorkloadProfile {
         },
         collected_at: "2026-03-29T10:00:00Z".into(),
         stats_reset: Some("2026-03-01T00:00:00Z".into()),
+        stats_window_seconds: Some(28.0 * 86400.0),
         unparseable_queries: 0,
     }
 }

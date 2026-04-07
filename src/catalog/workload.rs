@@ -1,9 +1,12 @@
-use anyhow::Result;
 use pg_query::protobuf::node;
 
 use crate::locks::DmlKind;
 use crate::parse::format_relation;
-use crate::workload::{QueryFamily, TransactionBaseline, WorkloadProfile, make_label};
+#[cfg(feature = "catalog")]
+use {
+    anyhow::Result,
+    crate::workload::{QueryFamily, TransactionBaseline, WorkloadProfile, make_label},
+};
 
 #[cfg(feature = "catalog")]
 pub async fn fetch_workload(
@@ -14,15 +17,31 @@ pub async fn fetch_workload(
     let baseline = fetch_transaction_baseline(client).await?;
     let unparseable = families.iter().filter(|f| f.tables.is_empty()).count();
 
+    let stats_window_seconds = if pg_version_num >= 140000 {
+        client
+            .query_opt(
+                "SELECT EXTRACT(EPOCH FROM (now() - stats_reset))::float8 FROM pg_stat_statements_info",
+                &[],
+            )
+            .await
+            .ok()
+            .flatten()
+            .and_then(|r| r.get::<_, Option<f64>>(0))
+    } else {
+        None
+    };
+
     Ok(WorkloadProfile {
         query_families: families,
         transaction_baseline: baseline,
         collected_at: chrono_now(),
         stats_reset,
+        stats_window_seconds,
         unparseable_queries: unparseable,
     })
 }
 
+#[cfg(feature = "catalog")]
 fn chrono_now() -> String {
     let output = std::process::Command::new("date")
         .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])
@@ -149,14 +168,25 @@ async fn fetch_transaction_baseline(
             "SELECT
                 count(*) FILTER (WHERE state = 'active'),
                 count(*) FILTER (WHERE state = 'idle in transaction'),
-                COALESCE(EXTRACT(EPOCH FROM percentile_cont(0.5) WITHIN GROUP (
-                    ORDER BY age(clock_timestamp(), xact_start)
-                ) FILTER (WHERE state = 'active' AND xact_start IS NOT NULL)) * 1000, 0),
-                COALESCE(EXTRACT(EPOCH FROM percentile_cont(0.95) WITHIN GROUP (
-                    ORDER BY age(clock_timestamp(), xact_start)
-                ) FILTER (WHERE state = 'active' AND xact_start IS NOT NULL)) * 1000, 0),
-                COALESCE(EXTRACT(EPOCH FROM max(age(clock_timestamp(), xact_start))
-                ) FILTER (WHERE state = 'active' AND xact_start IS NOT NULL) * 1000, 0)
+                COALESCE((
+                    SELECT EXTRACT(EPOCH FROM percentile_cont(0.5) WITHIN GROUP (
+                        ORDER BY age(clock_timestamp(), xact_start)
+                    ))::float8 * 1000
+                    FROM pg_stat_activity
+                    WHERE pid != pg_backend_pid() AND state = 'active' AND xact_start IS NOT NULL
+                ), 0::float8),
+                COALESCE((
+                    SELECT EXTRACT(EPOCH FROM percentile_cont(0.95) WITHIN GROUP (
+                        ORDER BY age(clock_timestamp(), xact_start)
+                    ))::float8 * 1000
+                    FROM pg_stat_activity
+                    WHERE pid != pg_backend_pid() AND state = 'active' AND xact_start IS NOT NULL
+                ), 0::float8),
+                COALESCE(
+                    max(EXTRACT(EPOCH FROM age(clock_timestamp(), xact_start))::float8)
+                        FILTER (WHERE state = 'active' AND xact_start IS NOT NULL) * 1000,
+                    0::float8
+                )
             FROM pg_stat_activity
             WHERE pid != pg_backend_pid()",
             &[],

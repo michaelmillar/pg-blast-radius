@@ -139,7 +139,17 @@ pub fn render(results: &[AnalysisResult]) {
             );
         }
 
-        if result.overall_confidence == ConfidenceGrade::Static {
+        if let Some(ref meta) = result.workload_meta {
+            let window = meta.stats_window_seconds.map(format_stats_window);
+            let window_str = window
+                .map(|w| format!("workload rates averaged over {w} since pg_stat_statements reset"))
+                .unwrap_or_else(|| "workload rates from pg_stat_statements (window unknown)".into());
+            println!("  {}", window_str.dimmed());
+            println!(
+                "  {}",
+                "Duration ranges modeled from table size and IO throughput, not historical measurements.".dimmed()
+            );
+        } else if result.overall_confidence == ConfidenceGrade::Static {
             println!(
                 "  {}",
                 "Use --dsn for workload-aware blast radius analysis.".dimmed()
@@ -152,6 +162,16 @@ pub fn render(results: &[AnalysisResult]) {
         }
 
         println!();
+    }
+}
+
+fn format_stats_window(seconds: f64) -> String {
+    if seconds < 3600.0 {
+        format!("{:.0}m", seconds / 60.0)
+    } else if seconds < 86400.0 {
+        format!("{:.0}h", seconds / 3600.0)
+    } else {
+        format!("{:.0}d", seconds / 86400.0)
     }
 }
 

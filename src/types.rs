@@ -149,12 +149,21 @@ pub struct BlastRadius {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct WorkloadMeta {
+    pub stats_reset: Option<String>,
+    pub collected_at: String,
+    pub stats_window_seconds: Option<f64>,
+    pub unparseable_queries: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct AnalysisResult {
     pub file: String,
     pub findings: Vec<Finding>,
     pub blast_radius: BlastRadius,
     pub overall_risk: RiskLevel,
     pub overall_confidence: ConfidenceGrade,
+    pub workload_meta: Option<WorkloadMeta>,
 }
 
 pub fn human_size(bytes: i64) -> String {

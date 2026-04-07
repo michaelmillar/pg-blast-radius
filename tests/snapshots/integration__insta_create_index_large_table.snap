@@ -116,5 +116,6 @@ expression: result
     ]
   },
   "overall_risk": "extreme",
-  "overall_confidence": "estimated"
+  "overall_confidence": "estimated",
+  "workload_meta": null
 }

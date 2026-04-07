@@ -113,27 +113,33 @@ pg-blast-radius analyse migration.sql --stats-file prod-stats.json
 | `CREATE INDEX` | CONCURRENTLY detection, SHARE lock warning |
 | `DROP INDEX` | CONCURRENTLY detection |
 | `DROP COLUMN` | Lock warning, application breakage risk |
+| `DROP CONSTRAINT` | Lock warning, FK dual-table locking |
 | `RENAME COLUMN/TABLE` | Lock warning, application breakage risk |
 | `ATTACH PARTITION` | Scan risk, pre-validated CHECK optimisation |
+| `TRUNCATE` | Destructive operation, ACCESS EXCLUSIVE warning |
+| `VACUUM / VACUUM FULL` | Non-blocking vs ACCESS EXCLUSIVE rewrite |
+| `ANALYZE` | Non-blocking statistics collection |
+| `REINDEX` | CONCURRENTLY detection, lock warning |
+| `REFRESH MATERIALIZED VIEW` | CONCURRENTLY detection, lock warning |
 
 ## How it compares
 
-pg-blast-radius occupies a specific niche: **workload-aware risk forecasting with explicit confidence accounting**. Other tools cover adjacent parts of the problem.
+Most migration tools lint syntax or execute changes safely. pg-blast-radius does neither. It forecasts operational impact from your actual production workload.
 
-| | pg-blast-radius | squawk | Atlas lint | Eugene | pgfence |
+| | pg-blast-radius | squawk | Eugene | pgfence | Atlas lint |
 |---|---|---|---|---|---|
-| Static lint rules | ~15 | 31 | 20+ | 12+ | 15+ |
-| Lock mode prediction | Yes | No | Yes | Yes | Yes |
-| Safe rewrite suggestions | Yes (recipes) | Partial | Yes | No | Yes |
-| Live DB context | Workload + catalog | No | Schema | Trace mode | Stats snapshot |
-| Blocked query forecast | Yes | No | No | No | No |
-| Duration P50/P90/worst | Yes | No | No | No | No |
-| Confidence ledger | Yes | No | No | No | No |
+| Rules | 28 | 31 | 12+ | 15+ | 20+ |
+| Lock mode detection | Full parser | Syntax rules | Parser + trace | Parser | Schema-aware |
+| Workload-aware | Yes (`pg_stat_statements`) | No | No | Table size only | No |
+| Duration forecast | P50/P90/worst | No | No | No | No |
+| Blocked query families | Yes | No | No | No | No |
 | Queue depth estimates | Yes | No | No | No | No |
+| Safe rewrite recipes | Yes | Partial | No | Yes | Yes |
+| Confidence ledger | Yes | No | No | No | No |
 
-**Strengths**: Tells you what queries queue up and for how long, on your actual workload. Explicit about what it knows vs assumes.
+**Strengths**: Tells you which queries queue up, how many per minute, and for how long, on your actual workload. Explicit about what it knows vs what it assumes.
 
-**Weaknesses**: Fewer lint rules than squawk. No trace/replay mode (yet). Requires `pg_stat_statements` for full analysis.
+**Weaknesses**: Fewer lint rules than squawk. No trace/replay mode (yet). Requires `pg_stat_statements` for full workload analysis.
 
 Use squawk in pre-commit for fast linting. Use pg-blast-radius in CI for operational risk assessment.
 
@@ -151,7 +157,6 @@ pg-blast-radius collect-stats --dsn <dsn>
 | `--fail-level` | high | Exit non-zero if any finding meets this level |
 | `--dsn` | none | Database connection (read-only) for catalog + workload |
 | `--stats-file` | none | Pre-collected stats JSON (alternative to --dsn) |
-| `--no-workload` | false | Skip pg_stat_statements/pg_stat_activity queries |
 
 ### Exit codes
 
@@ -190,13 +195,13 @@ cd pg-blast-radius
 cargo build --release
 ```
 
-Requires Rust 1.85+ and a C compiler (for libpg_query).
+Requires Rust stable and a C compiler (for libpg_query).
 
 ## Status
 
 52 tests passing. Production-ready for static and catalog-aware analysis. Workload-aware forecasting is new in v0.2 and should be validated against your environment.
 
-Not yet implemented: REINDEX, VACUUM/ANALYSE, materialized views, TRUNCATE, trace/replay mode, custom rules.
+Not yet implemented: trace/replay mode, custom rules.
 
 ## Licence
 

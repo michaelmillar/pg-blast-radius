@@ -72,6 +72,30 @@ pub fn analyse_alter_table(
                     super::constraints::analyse_validate_constraint(cmd, &table, table_bytes, stmt_sql, ctx),
                 );
             }
+            AlterTableType::AtDropConstraint => {
+                findings.push(Finding {
+                    rule_id: "drop-constraint".into(),
+                    risk_level: RiskLevel::Medium,
+                    confidence: ConfidenceLedger::static_only(
+                        vec!["ACCESS EXCLUSIVE lock for DROP CONSTRAINT (brief, catalog only)".into()],
+                    ),
+                    lock_mode: LockMode::AccessExclusive,
+                    rewrite: RewriteRisk::None,
+                    affected_table: Some(table.clone()),
+                    summary: format!(
+                        "DROP CONSTRAINT \"{}\" on \"{table}\" takes ACCESS EXCLUSIVE lock",
+                        cmd.name
+                    ),
+                    explanation: "Dropping a constraint removes it from the catalog. \
+                        ACCESS EXCLUSIVE lock is brief but blocks all concurrent queries. \
+                        For foreign keys, both the referencing and referenced tables are locked."
+                        .into(),
+                    recipe: None,
+                    pg_version_note: None,
+                    statement_sql: stmt_sql.into(),
+                    duration_forecast: None,
+                });
+            }
             AlterTableType::AtAttachPartition => {
                 let risk = adjust_risk_for_size(RiskLevel::High, table_bytes);
                 findings.push(Finding {
@@ -125,8 +149,56 @@ fn analyse_add_column(
     let has_not_null = col_def.is_not_null || has_not_null_constraint(&col_def.constraints);
     let volatile = has_default && is_volatile_default(default_expr);
 
+    let mut inline_fk_findings = Vec::new();
+    for c in &col_def.constraints {
+        if let Some(node::Node::Constraint(con)) = c.node.as_ref() {
+            if ConstrType::try_from(con.contype) == Ok(ConstrType::ConstrForeign) {
+                let ref_table = con
+                    .pktable
+                    .as_ref()
+                    .map(|r| {
+                        if r.schemaname.is_empty() {
+                            r.relname.clone()
+                        } else {
+                            format!("{}.{}", r.schemaname, r.relname)
+                        }
+                    })
+                    .unwrap_or_else(|| "unknown".into());
+                let risk = adjust_risk_for_size(RiskLevel::High, table_bytes);
+                inline_fk_findings.push(Finding {
+                    rule_id: "add-foreign-key".into(),
+                    risk_level: risk,
+                    confidence: match table_bytes {
+                        Some(b) => ConfidenceLedger::with_catalog(
+                            vec!["inline REFERENCES creates FK with full scan for validation".into()],
+                            vec![format!("table size is {}", human_size(b))],
+                        ),
+                        None => ConfidenceLedger::static_only(
+                            vec!["inline REFERENCES creates FK with full scan for validation".into()],
+                        ),
+                    },
+                    lock_mode: LockMode::ShareRowExclusive,
+                    rewrite: RewriteRisk::None,
+                    affected_table: Some(table.into()),
+                    summary: format!(
+                        "ADD COLUMN \"{col_name}\" on \"{table}\" with inline REFERENCES to \"{ref_table}\" scans table"
+                    ),
+                    explanation: format!(
+                        "Inline REFERENCES constraint creates a foreign key. \
+                         ShareRowExclusive lock on both \"{table}\" and \"{ref_table}\". \
+                         Full scan of \"{table}\" to verify all rows satisfy the FK."
+                    ),
+                    recipe: None,
+                    pg_version_note: None,
+                    statement_sql: stmt_sql.into(),
+                    duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline)),
+                });
+            }
+        }
+    }
+
     if !has_default {
-        return vec![Finding {
+        let mut findings = vec![Finding {
             rule_id: "add-column".into(),
             risk_level: RiskLevel::Low,
             confidence: ConfidenceLedger::static_only(
@@ -144,11 +216,13 @@ fn analyse_add_column(
             statement_sql: stmt_sql.into(),
             duration_forecast: None,
         }];
+        findings.extend(inline_fk_findings);
+        return findings;
     }
 
     if volatile {
         let risk = adjust_risk_for_size(RiskLevel::Extreme, table_bytes);
-        return vec![Finding {
+        let mut findings = vec![Finding {
             rule_id: "add-column-volatile-default".into(),
             risk_level: risk,
             confidence: match table_bytes {
@@ -177,6 +251,8 @@ fn analyse_add_column(
             statement_sql: stmt_sql.into(),
             duration_forecast: table_bytes.map(|b| forecast::forecast_rewrite(b, ctx.transaction_baseline)),
         }];
+        findings.extend(inline_fk_findings);
+        return findings;
     }
 
     if ctx.pg_version.at_least(11) {
@@ -230,11 +306,12 @@ fn analyse_add_column(
             });
         }
 
+        findings.extend(inline_fk_findings);
         return findings;
     }
 
     let risk = adjust_risk_for_size(RiskLevel::Extreme, table_bytes);
-    vec![Finding {
+    let mut findings = vec![Finding {
         rule_id: "add-column-default".into(),
         risk_level: risk,
         confidence: match table_bytes {
@@ -267,7 +344,9 @@ fn analyse_add_column(
         pg_version_note: Some("Upgrade to PG 11+ to avoid this rewrite.".into()),
         statement_sql: stmt_sql.into(),
         duration_forecast: table_bytes.map(|b| forecast::forecast_rewrite(b, ctx.transaction_baseline)),
-    }]
+    }];
+    findings.extend(inline_fk_findings);
+    findings
 }
 
 fn analyse_set_not_null(
@@ -475,11 +554,13 @@ fn find_default_expr(col_def: &protobuf::ColumnDef) -> Option<&protobuf::Node> {
         return Some(rd.as_ref());
     }
     for c in &col_def.constraints {
-        if let Some(node::Node::Constraint(con)) = c.node.as_ref()
-            && ConstrType::try_from(con.contype) == Ok(ConstrType::ConstrDefault)
-                && let Some(ref expr) = con.raw_expr {
+        if let Some(node::Node::Constraint(con)) = c.node.as_ref() {
+            if ConstrType::try_from(con.contype) == Ok(ConstrType::ConstrDefault) {
+                if let Some(ref expr) = con.raw_expr {
                     return Some(expr.as_ref());
                 }
+            }
+        }
     }
     None
 }

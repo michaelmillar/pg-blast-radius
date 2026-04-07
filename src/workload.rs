@@ -37,6 +37,8 @@ pub struct WorkloadProfile {
     pub transaction_baseline: TransactionBaseline,
     pub collected_at: String,
     pub stats_reset: Option<String>,
+    #[serde(default)]
+    pub stats_window_seconds: Option<f64>,
     pub unparseable_queries: usize,
 }
 

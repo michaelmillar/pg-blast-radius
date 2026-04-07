@@ -91,7 +91,7 @@ pub fn build_result(
                 ];
 
                 if entry.duration_forecast.is_some() {
-                    doc_facts.push("lock hold duration inferred from table size and throughput model".into());
+                    doc_facts.push("lock hold modeled from table size and IO throughput assumptions".into());
                 }
 
                 entry.confidence = ConfidenceLedger::with_workload(doc_facts, catalog_facts, stats_facts);
@@ -130,7 +130,14 @@ pub fn build_result(
         .iter()
         .map(|f| f.confidence.grade)
         .min()
-        .unwrap_or(ConfidenceGrade::Measured);
+        .unwrap_or(ConfidenceGrade::Static);
+
+    let workload_meta = workload.map(|w| WorkloadMeta {
+        stats_reset: w.stats_reset.clone(),
+        collected_at: w.collected_at.clone(),
+        stats_window_seconds: w.stats_window_seconds,
+        unparseable_queries: w.unparseable_queries,
+    });
 
     AnalysisResult {
         file: file.into(),
@@ -138,5 +145,6 @@ pub fn build_result(
         blast_radius: BlastRadius { per_table: tables },
         overall_risk,
         overall_confidence,
+        workload_meta,
     }
 }

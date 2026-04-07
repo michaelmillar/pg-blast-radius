@@ -91,5 +91,6 @@ expression: result
     ]
   },
   "overall_risk": "high",
-  "overall_confidence": "static"
+  "overall_confidence": "static",
+  "workload_meta": null
 }
