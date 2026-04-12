@@ -37,6 +37,7 @@ pub struct RuleContext<'a> {
     pub pg_version: PgVersion,
     pub catalog: Option<&'a CatalogInfo>,
     pub transaction_baseline: Option<&'a TransactionBaseline>,
+    pub io_throughput: Option<(f64, f64)>,
 }
 
 pub fn analyse(source: &str, ctx: &RuleContext) -> Result<Vec<Finding>> {

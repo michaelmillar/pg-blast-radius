@@ -40,6 +40,9 @@ enum Commands {
 
         #[arg(long)]
         stats_file: Option<PathBuf>,
+
+        #[arg(long, value_name = "LOW:HIGH")]
+        io_throughput: Option<String>,
     },
 
     #[cfg(feature = "catalog")]
@@ -70,6 +73,7 @@ fn main() -> Result<()> {
             #[cfg(feature = "catalog")]
             dsn,
             stats_file,
+            io_throughput,
         } => {
             if files.is_empty() {
                 anyhow::bail!("No SQL files provided. Usage: pg-blast-radius analyse <files...>");
@@ -86,10 +90,32 @@ fn main() -> Result<()> {
                 .and_then(|c| c.workload.as_ref())
                 .map(|w| &w.transaction_baseline);
 
+            let io_throughput_parsed = match io_throughput {
+                Some(ref s) => {
+                    let parts: Vec<&str> = s.split(':').collect();
+                    if parts.len() != 2 {
+                        anyhow::bail!("Expected format: --io-throughput LOW:HIGH (e.g. 200:800)");
+                    }
+                    let low: f64 = parts[0].parse()
+                        .map_err(|_| anyhow::anyhow!("Invalid low throughput: {}", parts[0]))?;
+                    let high: f64 = parts[1].parse()
+                        .map_err(|_| anyhow::anyhow!("Invalid high throughput: {}", parts[1]))?;
+                    if low > high {
+                        anyhow::bail!("Low throughput ({low}) must not exceed high ({high})");
+                    }
+                    if low <= 0.0 {
+                        anyhow::bail!("Throughput must be positive");
+                    }
+                    Some((low, high))
+                }
+                None => None,
+            };
+
             let ctx = RuleContext {
                 pg_version: PgVersion { major: pg_version },
                 catalog: catalog.as_ref(),
                 transaction_baseline,
+                io_throughput: io_throughput_parsed,
             };
 
             let workload = catalog.as_ref().and_then(|c| c.workload.as_ref());

@@ -43,8 +43,8 @@ expression: result
       "pg_version_note": null,
       "statement_sql": "CREATE INDEX idx_orders_customer ON orders (customer_id)",
       "duration_forecast": {
-        "p50_seconds": 596.0464477539063,
-        "p90_seconds": 1589.4571940104167,
+        "fast_seconds": 596.0464477539063,
+        "slow_seconds": 1589.4571940104167,
         "worst_seconds": 4768.37158203125,
         "assumptions": [
           {
@@ -53,13 +53,18 @@ expression: result
             "source": "catalog"
           },
           {
+            "factor": "IO throughput",
+            "assumed": "30-80 MB/s",
+            "source": "assumed"
+          },
+          {
             "factor": "cache state",
-            "assumed": "warm shared_buffers at p50, cold at p90",
+            "assumed": "warm shared_buffers (fast), cold reads (slow)",
             "source": "assumed"
           },
           {
             "factor": "lock acquisition delay",
-            "assumed": "no workload data, worst = 3x p90 heuristic",
+            "assumed": "no workload data, worst = 3x slow heuristic",
             "source": "assumed"
           }
         ]
@@ -76,8 +81,8 @@ expression: result
         "statement_count": 1,
         "table_size": null,
         "duration_forecast": {
-          "p50_seconds": 596.0464477539063,
-          "p90_seconds": 1589.4571940104167,
+          "fast_seconds": 596.0464477539063,
+          "slow_seconds": 1589.4571940104167,
           "worst_seconds": 4768.37158203125,
           "assumptions": [
             {
@@ -86,13 +91,18 @@ expression: result
               "source": "catalog"
             },
             {
+              "factor": "IO throughput",
+              "assumed": "30-80 MB/s",
+              "source": "assumed"
+            },
+            {
               "factor": "cache state",
-              "assumed": "warm shared_buffers at p50, cold at p90",
+              "assumed": "warm shared_buffers (fast), cold reads (slow)",
               "source": "assumed"
             },
             {
               "factor": "lock acquisition delay",
-              "assumed": "no workload data, worst = 3x p90 heuristic",
+              "assumed": "no workload data, worst = 3x slow heuristic",
               "source": "assumed"
             }
           ]

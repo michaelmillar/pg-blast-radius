@@ -188,7 +188,7 @@ pub fn analyse_reindex(
             recipe: None,
             pg_version_note: Some("REINDEX CONCURRENTLY available on PG 12+.".into()),
             statement_sql: stmt_sql.into(),
-            duration_forecast: table_bytes.map(|b| forecast::forecast_index_build(b, ctx.transaction_baseline)),
+            duration_forecast: table_bytes.map(|b| forecast::forecast_index_build(b, ctx.transaction_baseline, ctx.io_throughput)),
         }]
     } else {
         let kind_label = match kind {
@@ -225,7 +225,7 @@ pub fn analyse_reindex(
             recipe: None,
             pg_version_note: Some("Use REINDEX CONCURRENTLY (PG 12+) for non-blocking rebuild.".into()),
             statement_sql: stmt_sql.into(),
-            duration_forecast: table_bytes.map(|b| forecast::forecast_index_build(b, ctx.transaction_baseline)),
+            duration_forecast: table_bytes.map(|b| forecast::forecast_index_build(b, ctx.transaction_baseline, ctx.io_throughput)),
         }]
     }
 }

@@ -41,8 +41,8 @@ pub fn build_result(
         if let Some(ref est) = f.duration_forecast {
             entry.duration_forecast = Some(match entry.duration_forecast.take() {
                 Some(existing) => DurationForecast {
-                    p50_seconds: existing.p50_seconds + est.p50_seconds,
-                    p90_seconds: existing.p90_seconds + est.p90_seconds,
+                    fast_seconds: existing.fast_seconds + est.fast_seconds,
+                    slow_seconds: existing.slow_seconds + est.slow_seconds,
                     worst_seconds: existing.worst_seconds + est.worst_seconds,
                     assumptions: existing.assumptions,
                 },

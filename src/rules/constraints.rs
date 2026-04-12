@@ -91,7 +91,7 @@ fn analyse_check(
             recipe: Some(recipe::add_check_safe(table, con_name, "<check_expression>")),
             pg_version_note: None,
             statement_sql: stmt_sql.into(),
-            duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline)),
+            duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline, ctx.io_throughput)),
         }]
     }
 }
@@ -172,7 +172,7 @@ fn analyse_foreign_key(
             )),
             pg_version_note: None,
             statement_sql: stmt_sql.into(),
-            duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline)),
+            duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline, ctx.io_throughput)),
         }]
     }
 }
@@ -211,7 +211,7 @@ fn analyse_unique(
         recipe: None,
         pg_version_note: None,
         statement_sql: stmt_sql.into(),
-        duration_forecast: table_bytes.map(|b| forecast::forecast_index_build(b, ctx.transaction_baseline)),
+        duration_forecast: table_bytes.map(|b| forecast::forecast_index_build(b, ctx.transaction_baseline, ctx.io_throughput)),
     }]
 }
 
@@ -247,7 +247,7 @@ fn analyse_primary_key(
         recipe: None,
         pg_version_note: None,
         statement_sql: stmt_sql.into(),
-        duration_forecast: table_bytes.map(|b| forecast::forecast_index_build(b, ctx.transaction_baseline)),
+        duration_forecast: table_bytes.map(|b| forecast::forecast_index_build(b, ctx.transaction_baseline, ctx.io_throughput)),
     }]
 }
 
@@ -289,6 +289,6 @@ pub fn analyse_validate_constraint(
         recipe: None,
         pg_version_note: None,
         statement_sql: stmt_sql.into(),
-        duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline)),
+        duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline, ctx.io_throughput)),
     }
 }

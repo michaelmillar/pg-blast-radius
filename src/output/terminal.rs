@@ -44,11 +44,11 @@ pub fn render(results: &[AnalysisResult]) {
                 );
                 for bq in &t.blocked_queries {
                     println!(
-                        "      {}  {}{:.0}/min  ~{} queued (p50)",
+                        "      {}  {}{:.0}/min  ~{} queued (fast)",
                         bq.query_label.dimmed(),
                         " ".repeat(max_label_pad(&t.blocked_queries, &bq.query_label)),
                         bq.calls_per_sec * 60.0,
-                        bq.queued_at_p50,
+                        bq.queued_at_fast,
                     );
                 }
             } else if t.total_blocked_qps == 0.0 && t.confidence.grade < ConfidenceGrade::Measured
@@ -149,6 +149,25 @@ pub fn render(results: &[AnalysisResult]) {
                 "  {}",
                 "Duration ranges modeled from table size and IO throughput, not historical measurements.".dimmed()
             );
+
+            if let Some(window_secs) = meta.stats_window_seconds {
+                if window_secs > 604800.0 {
+                    let days = (window_secs / 86400.0).round() as u64;
+                    eprintln!(
+                        "  {}",
+                        format!(
+                            "warning: workload rates averaged over {days}d. \
+                             Consider pg_stat_statements_reset() for a tighter measurement window."
+                        ).yellow()
+                    );
+                }
+            }
+            if meta.stats_reset.is_none() {
+                eprintln!(
+                    "  {}",
+                    "warning: pg_stat_statements has never been reset. Rates reflect all-time averages.".yellow()
+                );
+            }
         } else if result.overall_confidence == ConfidenceGrade::Static {
             println!(
                 "  {}",

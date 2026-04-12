@@ -49,6 +49,7 @@ fn analyse_fixture(sql: &str, catalog: Option<&CatalogInfo>) -> AnalysisResult {
         transaction_baseline: catalog
             .and_then(|c| c.workload.as_ref())
             .map(|w| &w.transaction_baseline),
+        io_throughput: None,
     };
     let findings = analyse(sql, &ctx).unwrap();
     let workload = catalog.and_then(|c| c.workload.as_ref());
@@ -251,6 +252,7 @@ fn pg10_add_column_default_is_extreme() {
         pg_version: PgVersion { major: 10 },
         catalog: None,
         transaction_baseline: None,
+        io_throughput: None,
     };
     let sql = "ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active';";
     let findings = analyse(sql, &ctx).unwrap();
@@ -275,14 +277,14 @@ fn confidence_is_estimated_with_catalog() {
 }
 
 #[test]
-fn duration_forecast_has_p50_p90_worst() {
+fn duration_forecast_has_fast_slow_worst() {
     let catalog = mock_catalog(&[("orders", 10_737_418_240, 100_000_000)]);
     let sql = "CREATE INDEX idx_orders_cust ON orders (customer_id);";
     let result = analyse_fixture(sql, Some(&catalog));
     let forecast = result.findings[0].duration_forecast.as_ref().unwrap();
-    assert!(forecast.p50_seconds > 0.0);
-    assert!(forecast.p90_seconds >= forecast.p50_seconds);
-    assert!(forecast.worst_seconds >= forecast.p90_seconds);
+    assert!(forecast.fast_seconds > 0.0);
+    assert!(forecast.slow_seconds >= forecast.fast_seconds);
+    assert!(forecast.worst_seconds >= forecast.slow_seconds);
 }
 
 #[test]

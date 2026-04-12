@@ -268,8 +268,8 @@ pub struct ForecastAssumption {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DurationForecast {
-    pub p50_seconds: f64,
-    pub p90_seconds: f64,
+    pub fast_seconds: f64,
+    pub slow_seconds: f64,
     pub worst_seconds: f64,
     pub assumptions: Vec<ForecastAssumption>,
 }
@@ -278,9 +278,9 @@ impl fmt::Display for DurationForecast {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} (p50)  {} (p90)  {} (worst)",
-            format_seconds(self.p50_seconds),
-            format_seconds(self.p90_seconds),
+            "{} (fast)  {} (slow)  {} (worst)",
+            format_seconds(self.fast_seconds),
+            format_seconds(self.slow_seconds),
             format_seconds(self.worst_seconds),
         )
     }
@@ -303,8 +303,8 @@ pub struct BlockedQueryForecast {
     pub query_label: String,
     pub normalised_sql: String,
     pub calls_per_sec: f64,
-    pub queued_at_p50: u64,
-    pub queued_at_p90: u64,
+    pub queued_at_fast: u64,
+    pub queued_at_slow: u64,
 }
 
 pub fn adjust_risk_for_size(base: RiskLevel, total_bytes: Option<i64>) -> RiskLevel {

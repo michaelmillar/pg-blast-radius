@@ -22,7 +22,7 @@ https://github.com/user-attachments/assets/ee5c219c-5be6-4a9f-afe6-a2a8debff332
 pg-blast-radius reads your migration SQL, connects read-only to your database, and reports:
 
 - **Blocked query families** from `pg_stat_statements`, showing which production queries queue up and how many
-- **Duration forecasts** as P50 / P90 / worst-case ranges, not single-point estimates
+- **Duration forecasts** as fast / slow / worst-case ranges, not single-point estimates
 - **Rollout recipes** with step-by-step safer SQL when a migration should be split
 - **Confidence ledger** stating what is known from docs, observed from catalog, inferred from workload, and assumed
 
@@ -35,16 +35,16 @@ $ pg-blast-radius analyse migration.sql --stats-file prod-stats.json
 
   orders (34.0 GB, ~892M rows)
     Lock: ACCESS EXCLUSIVE (blocks all reads and writes)
-    Duration: 16m (p50)  37m (p90)  37m (worst)
+    Duration: 16m (fast)  37m (slow)  37m (worst)
     Blocked queries: 3 families, 14202 calls/min combined
-      SELECT ... FROM orders WHERE customer_id = $1   8100/min  ~129255 queued (p50)
-      INSERT INTO orders (...)                        4800/min  ~76596 queued (p50)
-      UPDATE orders SET status = $1 WHERE id = $2     1302/min  ~20777 queued (p50)
+      SELECT ... FROM orders WHERE customer_id = $1   8100/min  ~129255 queued (fast)
+      INSERT INTO orders (...)                        4800/min  ~76596 queued (fast)
+      UPDATE orders SET status = $1 WHERE id = $2     1302/min  ~20777 queued (fast)
     Confidence: query load MEASURED, lock hold INFERRED
     3 statements combined
 
   EXTREME  ALTER COLUMN TYPE on "orders"."total" to numeric triggers table rewrite
-    Estimated: 6m (p50)  12m (p90)  12m (worst)
+    Estimated: 6m (fast)  12m (slow)  12m (worst)
     Rollout recipe: Expand/migrate/contract for "orders"."total"
       1. [expand]    ADD COLUMN "total_new" numeric
       2. [backfill]  UPDATE in batches
@@ -53,11 +53,11 @@ $ pg-blast-radius analyse migration.sql --stats-file prod-stats.json
       5. [contract]  DROP old column, trigger, rename
 
   EXTREME  CREATE INDEX "idx_orders_status" without CONCURRENTLY
-    Estimated: 7m (p50)  19m (p90)  19m (worst)
+    Estimated: 7m (fast)  19m (slow)  19m (worst)
     Rollout recipe: CREATE INDEX CONCURRENTLY
 
   EXTREME  ADD FOREIGN KEY scans 34 GB table
-    Estimated: 3m (p50)  6m (p90)  6m (worst)
+    Estimated: 3m (fast)  6m (slow)  6m (worst)
     Rollout recipe: ADD ... NOT VALID + VALIDATE CONSTRAINT
 
   Overall: EXTREME RISK | Confidence: ESTIMATED
@@ -95,7 +95,7 @@ pg-blast-radius analyse migration.sql --stats-file prod-stats.json
 | Lock mode prediction | Yes | Yes | Yes |
 | Table rewrite detection | Yes | Yes | Yes |
 | Risk level | Conservative | Size-aware | Size-aware |
-| Duration forecast | No | P50/P90/worst | P50/P90/worst + lock delay |
+| Duration forecast | No | fast/slow/worst | fast/slow/worst + lock delay |
 | Blocked query families | No | No | Yes |
 | Queue depth estimates | No | No | Yes |
 | Rollout recipes | Yes | Yes | Yes |
@@ -126,16 +126,16 @@ pg-blast-radius analyse migration.sql --stats-file prod-stats.json
 
 Most migration tools lint syntax or execute changes safely. pg-blast-radius does neither. It forecasts operational impact from your actual production workload.
 
-| | pg-blast-radius | squawk | Eugene | pgfence | Atlas lint |
-|---|---|---|---|---|---|
-| Rules | 28 | 31 | 12+ | 15+ | 20+ |
-| Lock mode detection | Full parser | Syntax rules | Parser + trace | Parser | Schema-aware |
-| Workload-aware | Yes (`pg_stat_statements`) | No | No | Table size only | No |
-| Duration forecast | P50/P90/worst | No | No | No | No |
-| Blocked query families | Yes | No | No | No | No |
-| Queue depth estimates | Yes | No | No | No | No |
-| Safe rewrite recipes | Yes | Partial | No | Yes | Yes |
-| Confidence ledger | Yes | No | No | No | No |
+| | pg-blast-radius | squawk | Eugene | pgfence | Atlas lint | pg-schema-diff |
+|---|---|---|---|---|---|---|
+| Rules | 28 | 31 | 12+ | 15+ | 20+ | N/A (generator) |
+| Lock mode detection | Full parser | Syntax rules | Parser + trace | Parser | Schema-aware | Lock-minimised SQL |
+| Workload-aware | Yes (`pg_stat_statements`) | No | No | Table size only | No | No |
+| Duration forecast | fast/slow/worst | No | No | No | No | No |
+| Blocked query families | Yes | No | No | No | No | No |
+| Queue depth estimates | Yes | No | No | No | No | No |
+| Safe rewrite recipes | Yes | Partial | No | Yes | Yes | Auto-generated |
+| Confidence ledger | Yes | No | No | No | No | No |
 
 **Strengths**: Tells you which queries queue up, how many per minute, and for how long, on your actual workload. Explicit about what it knows vs what it assumes.
 
@@ -157,6 +157,7 @@ pg-blast-radius collect-stats --dsn <dsn>
 | `--fail-level` | high | Exit non-zero if any finding meets this level |
 | `--dsn` | none | Database connection (read-only) for catalog + workload |
 | `--stats-file` | none | Pre-collected stats JSON (alternative to --dsn) |
+| `--io-throughput` | none | IO throughput range in MB/s (e.g. `200:800`) |
 
 ### Exit codes
 
@@ -199,7 +200,7 @@ Requires Rust stable and a C compiler (for libpg_query).
 
 ## Status
 
-52 tests passing. Production-ready for static and catalog-aware analysis. Workload-aware forecasting is new in v0.2 and should be validated against your environment.
+52 tests passing. Production-ready for static and catalog-aware analysis. Workload-aware forecasting validated against real Postgres 16 workloads.
 
 Not yet implemented: trace/replay mode, custom rules.
 

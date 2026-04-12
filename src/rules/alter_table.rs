@@ -121,7 +121,7 @@ pub fn analyse_alter_table(
                     recipe: Some(recipe::attach_partition_safe(&table)),
                     pg_version_note: None,
                     statement_sql: stmt_sql.into(),
-                    duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline)),
+                    duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline, ctx.io_throughput)),
                 });
             }
             _ => {}
@@ -191,7 +191,7 @@ fn analyse_add_column(
                     recipe: None,
                     pg_version_note: None,
                     statement_sql: stmt_sql.into(),
-                    duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline)),
+                    duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline, ctx.io_throughput)),
                 });
             }
         }
@@ -249,7 +249,7 @@ fn analyse_add_column(
                 "Volatile defaults always trigger a rewrite regardless of PG version.".into(),
             ),
             statement_sql: stmt_sql.into(),
-            duration_forecast: table_bytes.map(|b| forecast::forecast_rewrite(b, ctx.transaction_baseline)),
+            duration_forecast: table_bytes.map(|b| forecast::forecast_rewrite(b, ctx.transaction_baseline, ctx.io_throughput)),
         }];
         findings.extend(inline_fk_findings);
         return findings;
@@ -343,7 +343,7 @@ fn analyse_add_column(
         recipe: None,
         pg_version_note: Some("Upgrade to PG 11+ to avoid this rewrite.".into()),
         statement_sql: stmt_sql.into(),
-        duration_forecast: table_bytes.map(|b| forecast::forecast_rewrite(b, ctx.transaction_baseline)),
+        duration_forecast: table_bytes.map(|b| forecast::forecast_rewrite(b, ctx.transaction_baseline, ctx.io_throughput)),
     }];
     findings.extend(inline_fk_findings);
     findings
@@ -405,7 +405,7 @@ fn analyse_set_not_null(
             None
         },
         statement_sql: stmt_sql.into(),
-        duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline)),
+        duration_forecast: table_bytes.map(|b| forecast::forecast_scan(b, ctx.transaction_baseline, ctx.io_throughput)),
     }
 }
 
@@ -458,7 +458,7 @@ fn analyse_alter_type(
             recipe: Some(recipe::change_column_type(table, column, &new_type)),
             pg_version_note: None,
             statement_sql: stmt_sql.into(),
-            duration_forecast: table_bytes.map(|b| forecast::forecast_rewrite(b, ctx.transaction_baseline)),
+            duration_forecast: table_bytes.map(|b| forecast::forecast_rewrite(b, ctx.transaction_baseline, ctx.io_throughput)),
         }
     } else {
         Finding {

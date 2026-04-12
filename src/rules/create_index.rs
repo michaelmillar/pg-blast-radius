@@ -53,7 +53,7 @@ pub fn analyse_index_stmt(
             recipe: None,
             pg_version_note: None,
             statement_sql: stmt_sql.into(),
-            duration_forecast: table_bytes.map(|b| forecast::forecast_index_build(b, ctx.transaction_baseline)),
+            duration_forecast: table_bytes.map(|b| forecast::forecast_index_build(b, ctx.transaction_baseline, ctx.io_throughput)),
         }]
     } else {
         let base_risk = RiskLevel::High;
@@ -90,7 +90,7 @@ pub fn analyse_index_stmt(
             recipe: Some(recipe::create_index_concurrently(&table, &columns, &idx_name)),
             pg_version_note: None,
             statement_sql: stmt_sql.into(),
-            duration_forecast: table_bytes.map(|b| forecast::forecast_index_build(b, ctx.transaction_baseline)),
+            duration_forecast: table_bytes.map(|b| forecast::forecast_index_build(b, ctx.transaction_baseline, ctx.io_throughput)),
         }]
     }
 }

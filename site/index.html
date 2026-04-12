@@ -175,7 +175,7 @@
 <br><br>
   <span class="table-name">orders</span> <span class="dim">(34.0 GB, ~892M rows)</span>
 <br>    Lock: <span class="lock-red">ACCESS EXCLUSIVE</span> (blocks all reads and writes)
-<br>    Duration: <span class="bold">16m (p50)  37m (p90)  37m (worst)</span>
+<br>    Duration: <span class="bold">16m (fast)  37m (slow)  37m (worst)</span>
 <br>    Blocked queries: 3 families, 14,202 calls/min combined
 <br>      <span class="dim">SELECT ... FROM orders WHERE customer_id = $1</span>   8,100/min  ~129,255 queued
 <br>      <span class="dim">INSERT INTO orders (...)</span>                        4,800/min   ~76,596 queued
@@ -183,7 +183,7 @@
 <br>    Confidence: <span class="dim">query load MEASURED, lock hold INFERRED</span>
 <br>
 <br>  <span class="badge-extreme">EXTREME</span> ALTER COLUMN TYPE triggers table rewrite
-<br>    <span class="dim">Estimated: 6m (p50) / 12m (p90)</span>
+<br>    <span class="dim">Estimated: 6m (fast) / 12m (slow)</span>
 <br>
 <br>    <span class="green">Rollout recipe:</span> Expand/migrate/contract
 <br>      1. <span class="cyan">[expand]</span> ADD COLUMN "total_new" numeric
@@ -206,7 +206,7 @@
     </div>
     <div class="card">
       <h3>Duration ranges</h3>
-      <p>P50, P90, and worst-case estimates based on table size and observed transaction durations. Not single-point guesses.</p>
+      <p>Fast, slow, and worst-case scenarios based on table size and IO throughput assumptions. Calibrate with --io-throughput for your hardware.</p>
     </div>
     <div class="card">
       <h3>Confidence ledger</h3>
@@ -230,7 +230,7 @@
 <section>
   <h2>Three modes</h2>
   <p><strong>Static</strong> (no database): lock modes, rewrite detection, rollout recipes. Confidence: STATIC.</p>
-  <p><strong>Catalog-aware</strong> (table sizes): size-adjusted risk, P50/P90/worst duration forecasts. Confidence: ESTIMATED.</p>
+  <p><strong>Catalog-aware</strong> (table sizes): size-adjusted risk, fast/slow/worst duration forecasts. Confidence: ESTIMATED.</p>
   <p><strong>Workload-aware</strong> (pg_stat_statements + pg_stat_activity): blocked query families, queue depth estimates, lock acquisition delay. Confidence: MEASURED.</p>
 </section>
 
