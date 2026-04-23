@@ -66,6 +66,12 @@ $ pg-blast-radius analyse migration.sql --stats-file prod-stats.json
 
 Without a database connection, it still analyses lock modes, rewrite risk, and generates recipes. With one, it tells you exactly what will hurt.
 
+## See the scare in 20 seconds
+
+One ALTER COLUMN TYPE on a 34 GB orders table forecasted against a real workload of 14,202 calls per minute.
+
+https://github.com/user-attachments/assets/8bb8a575-7888-43e3-a58c-3ed120e95209
+
 ## Quick start
 
 ```sh
